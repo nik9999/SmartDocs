@@ -11,6 +11,8 @@
     <PackageReference Include="Microsoft.Extensions.Options" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" />
+    <PackageReference Include="Tokenizers.DotNet" />
+    <PackageReference Include="Tokenizers.DotNet.runtime.win-x64" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,91 @@
+[
+  {
+    "query": "Измеренное значение Канал 2",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
+    ]
+  },
+  {
+    "query": "давление в системе МПа",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "температура технологического процесса",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "аварийный сигнал превышение порога",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "канал связи штатный режим",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "датчик техническая документация",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
+    ]
+  },
+  {
+    "query": "мониторинг данные мониторинга",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "напряжение фаза A B C",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "частота сети герц",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "активная мощность кВт коэффициент",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "реактивная мощность варcos фи",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "ток короткого замыкания номинальный",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567895"
+    ]
+  },
+  {
+    "query": "дифференциальная защита ток утечки",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567895"
+    ]
+  },
+  {
+    "query": "Канал 1 Канал 2 Канал 3",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567891",
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "несуществующий термин абракадабра",
+    "expectedDocumentIds": []
+  }
+]

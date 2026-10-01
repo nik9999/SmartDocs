@@ -460,4 +460,78 @@ public sealed class RetrievalEvaluatorTests
         Assert.Contains("MRR=", str);
         Assert.Contains("nDCG@K=", str);
     }
+
+    // =========================================================================
+    // Test — FormatBaseline
+    // =========================================================================
+
+    [Fact]
+    public void RetrievalMetrics_FormatBaseline_ReturnsHumanReadableReport()
+    {
+        // Arrange
+        var metrics = new RetrievalMetrics(0.8, 0.6, 0.75, 0.7, 5, 15);
+
+        // Act
+        var report = metrics.FormatBaseline();
+
+        // Assert
+        Assert.Contains("Retrieval Evaluation", report);
+        Assert.Contains("Queries: 15", report);
+        Assert.Contains("K: 5", report);
+        Assert.Contains("Recall@5:", report);
+        Assert.Contains("Precision@5:", report);
+        Assert.Contains("MRR:", report);
+        Assert.Contains("nDCG@5:", report);
+    }
+
+    // =========================================================================
+    // Test — BaselineGoldenQueries
+    // =========================================================================
+
+    [Fact]
+    public void BaselineGoldenQueries_GetQueries_ReturnsCorrectCount()
+    {
+        // Arrange & Act
+        var queries = BaselineGoldenQueries.GetQueries();
+
+        // Assert
+        Assert.Equal(15, queries.Count);
+    }
+
+    [Fact]
+    public void BaselineGoldenQueries_GetQueries_HasNoHitQuery()
+    {
+        // Arrange & Act
+        var queries = BaselineGoldenQueries.GetQueries();
+
+        // Assert — last query should have empty expected document set
+        var noHitQuery = queries.Last();
+        Assert.Equal("несуществующий термин абракадабра", noHitQuery.Query);
+        Assert.Empty(noHitQuery.ExpectedDocumentIds);
+    }
+
+    [Fact]
+    public void BaselineGoldenQueries_GetQueries_HasMultiDocumentQuery()
+    {
+        // Arrange & Act
+        var queries = BaselineGoldenQueries.GetQueries();
+
+        // Assert — query 14 should reference multiple documents
+        var multiDocQuery = queries[13];
+        Assert.Equal("Канал 1 Канал 2 Канал 3", multiDocQuery.Query);
+        Assert.Equal(2, multiDocQuery.ExpectedDocumentIds.Count);
+    }
+
+    [Fact]
+    public void BaselineGoldenQueries_GetQueries_AllHaveNonEmptyQuery()
+    {
+        // Arrange & Act
+        var queries = BaselineGoldenQueries.GetQueries();
+
+        // Assert
+        foreach (var query in queries)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(query.Query));
+        }
+    }
 }

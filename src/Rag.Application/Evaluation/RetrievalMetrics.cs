@@ -18,6 +18,22 @@ public sealed record RetrievalMetrics(
     int QueryCount)
 {
     /// <summary>
+    /// Returns a formatted baseline report suitable for console output.
+    /// </summary>
+    /// <returns>A human-readable string with all metrics.</returns>
+    public string FormatBaseline() =>
+        "Retrieval Evaluation\r\n" +
+        "====================\r\n" +
+        "\r\n" +
+        $"Queries: {QueryCount}\r\n" +
+        $"K: {K}\r\n" +
+        "\r\n" +
+        $"Recall@{K}:      {RecallAtK:F4}\r\n" +
+        $"Precision@{K}:   {PrecisionAtK:F4}\r\n" +
+        $"MRR:             {Mrr:F4}\r\n" +
+        $"nDCG@{K}:        {NdcgAtK:F4}";
+
+    /// <summary>
     /// Returns a string representation of the metrics.
     /// </summary>
     public override string ToString() =>

@@ -1,28 +1,26 @@
+using System.Text.Json;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Rag.Core.Contracts;
 using Rag.Core.Embeddings;
 using Rag.Infrastructure.Configuration;
+using Tokenizers.DotNet;
 
 namespace Rag.Infrastructure.Embeddings;
 
 /// <summary>
 /// Generates embeddings using a local ONNX model (paraphrase-multilingual-MiniLM-L12-v2).
-/// Includes a built-in WordPiece tokenizer, mean pooling, and L2 normalization.
+/// Uses Tokenizers.DotNet (HuggingFace tokenizers.rs wrapper) for correct SentencePiece Unigram tokenization.
+/// Includes mean pooling and L2 normalization.
 /// </summary>
 public sealed class LocalOnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposable
 {
-    private const string ClsToken = "[CLS]";
-    private const string SepToken = "[SEP]";
-    private const string PadToken = "[PAD]";
+    private const int PadTokenId = 1; // <pad> token ID from tokenizer.json added_tokens
 
     private readonly InferenceSession _session;
-    private readonly Dictionary<string, int> _vocab;
-    private readonly Dictionary<int, string> _inverseVocab;
+    private readonly Tokenizer _tokenizer;
     private readonly int _maxLength;
-    private readonly int _clsId;
-    private readonly int _sepId;
-    private readonly int _padId;
+    private readonly int _embeddingDim;
     private bool _disposed;
 
     /// <summary>
@@ -39,21 +37,24 @@ public sealed class LocalOnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposab
                 $"ONNX model not found at '{modelPath}'.",
                 modelPath);
 
-        var vocabPath = Path.Combine(options.ModelPath, "vocab.txt");
-        if (!File.Exists(vocabPath))
-            throw new FileNotFoundException(
-                $"Vocab file not found at '{vocabPath}'.",
-                vocabPath);
-
         _maxLength = options.MaxLength;
 
-        // Load vocabulary
-        _vocab = LoadVocabulary(vocabPath);
-        _inverseVocab = _vocab.ToDictionary(kv => kv.Value, kv => kv.Key);
+        // Load tokenizer from tokenizer.json (SentencePiece Unigram)
+        var tokenizerPath = Path.Combine(options.ModelPath, "tokenizer.json");
+        if (!File.Exists(tokenizerPath))
+            throw new FileNotFoundException(
+                $"tokenizer.json not found in '{options.ModelPath}'.",
+                tokenizerPath);
 
-        _clsId = GetTokenId(ClsToken);
-        _sepId = GetTokenId(SepToken);
-        _padId = GetTokenId(PadToken);
+        try
+        {
+            _tokenizer = new Tokenizer(vocabPath: tokenizerPath);
+        }
+        catch (TokenizerException ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to load tokenizer from '{tokenizerPath}': {ex.Message}", ex);
+        }
 
         // Load ONNX model
         _session = new InferenceSession(modelPath, new SessionOptions());
@@ -62,7 +63,7 @@ public sealed class LocalOnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposab
         InputMetadata = _session.InputMetadata;
         OutputMetadata = _session.OutputMetadata;
         var outputMeta = OutputMetadata.Values.First();
-        OutputDimensions = outputMeta.Dimensions[2];
+        _embeddingDim = outputMeta.Dimensions[2];
     }
 
     /// <summary>
@@ -78,7 +79,7 @@ public sealed class LocalOnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposab
     /// <summary>
     /// Embedding dimension derived from the model output shape.
     /// </summary>
-    public int OutputDimensions { get; }
+    public int OutputDimensions => _embeddingDim;
 
     /// <inheritdoc />
     public async Task<Embedding> GenerateAsync(
@@ -91,25 +92,29 @@ public sealed class LocalOnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposab
         if (string.IsNullOrWhiteSpace(text))
             throw new ArgumentException("Text must not be null, empty, or whitespace.", nameof(text));
 
-        // Tokenize
-        var tokenIds = WordPieceEncode(text);
+        // Tokenize using HuggingFace tokenizers (SentencePiece Unigram)
+        var tokenIds = _tokenizer.Encode(text);
 
-        // Pad or truncate to max length
-        var inputIds = PadOrTruncate(tokenIds, _maxLength, _padId);
-        var attentionMask = new long[_maxLength];
-        for (var i = 0; i < inputIds.Length; i++)
+        // Truncate to max length
+        var truncatedCount = Math.Min(tokenIds.Length, _maxLength);
+        var inputIds = new int[truncatedCount];
+        Array.Copy(tokenIds, inputIds, truncatedCount);
+
+        // Create attention mask (1 for real tokens, 0 for padding)
+        var attentionMask = new long[truncatedCount];
+        for (var i = 0; i < truncatedCount; i++)
         {
-            attentionMask[i] = inputIds[i] == _padId ? 0L : 1L;
+            attentionMask[i] = 1L;
         }
 
         // Token type IDs (all zeros for single sentence)
-        var tokenTypeIds = Enumerable.Repeat(0L, _maxLength).ToArray();
+        var tokenTypeIds = Enumerable.Repeat(0L, truncatedCount).ToArray();
 
-        // Create ONNX tensors using Memory<T> constructor
+        // Create ONNX tensors
         var inputIdsLong = inputIds.Select(x => (long)x).ToArray();
-        var inputIdsTensor = new DenseTensor<long>(inputIdsLong.AsMemory(), new[] { 1, _maxLength });
-        var attentionMaskTensor = new DenseTensor<long>(attentionMask.AsMemory(), new[] { 1, _maxLength });
-        var tokenTypeIdsTensor = new DenseTensor<long>(tokenTypeIds.AsMemory(), new[] { 1, _maxLength });
+        var inputIdsTensor = new DenseTensor<long>(inputIdsLong.AsMemory(), new[] { 1, truncatedCount });
+        var attentionMaskTensor = new DenseTensor<long>(attentionMask.AsMemory(), new[] { 1, truncatedCount });
+        var tokenTypeIdsTensor = new DenseTensor<long>(tokenTypeIds.AsMemory(), new[] { 1, truncatedCount });
 
         // Discover input names from metadata
         var inputIdsName = InputMetadata.Keys.First(k => k.Contains("input_ids", StringComparison.OrdinalIgnoreCase));
@@ -149,158 +154,6 @@ public sealed class LocalOnnxEmbeddingGenerator : IEmbeddingGenerator, IDisposab
 
         var model = "paraphrase-multilingual-MiniLM-L12-v2";
         return new Embedding(normalized, model);
-    }
-
-    /// <summary>
-    /// Loads the WordPiece vocabulary from vocab.txt.
-    /// </summary>
-    private static Dictionary<string, int> LoadVocabulary(string vocabPath)
-    {
-        var vocab = new Dictionary<string, int>(StringComparer.Ordinal);
-        var lines = File.ReadAllLines(vocabPath);
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var line = lines[i].Split('\t')[0]; // Handle possible tab-separated format
-            vocab[line] = i;
-        }
-        return vocab;
-    }
-
-    /// <summary>
-    /// Encodes text using WordPiece tokenization.
-    /// </summary>
-    private int[] WordPieceEncode(string text)
-    {
-        // Normalize text
-        text = NormalizeText(text);
-
-        // Split into initial tokens (words and subwords)
-        var tokens = SplitIntoTokens(text);
-
-        // WordPiece encode each token
-        var result = new List<int> { _clsId }; // [CLS]
-
-        foreach (var token in tokens)
-        {
-            var subtokens = WordPieceTokenize(token);
-            result.AddRange(subtokens);
-        }
-
-        result.Add(_sepId); // [SEP]
-
-        return result.ToArray();
-    }
-
-    /// <summary>
-    /// Normalizes text for tokenization.
-    /// </summary>
-    private static string NormalizeText(string text)
-    {
-        // Basic normalization: lowercase, collapse whitespace
-        text = text.ToLowerInvariant();
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ");
-        text = text.Trim();
-        return text;
-    }
-
-    /// <summary>
-    /// Splits text into initial tokens (words and punctuation).
-    /// </summary>
-    private string[] SplitIntoTokens(string text)
-    {
-        // Split on whitespace first
-        var words = text.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-        var tokens = new List<string>();
-
-        foreach (var word in words)
-        {
-            // Split word into subword-friendly chunks
-            // Handle common patterns: hyphens, slashes, etc.
-            var parts = System.Text.RegularExpressions.Regex.Split(word, @"([\-\/])");
-            foreach (var part in parts)
-            {
-                if (!string.IsNullOrEmpty(part))
-                    tokens.Add(part);
-            }
-        }
-
-        return tokens.ToArray();
-    }
-
-    /// <summary>
-    /// Tokenizes a single token using WordPiece algorithm.
-    /// </summary>
-    private int[] WordPieceTokenize(string token)
-    {
-        // If token is in vocab, return it directly
-        if (_vocab.TryGetValue(token, out var id))
-            return new[] { id };
-
-        // Try to find the longest matching subword
-        var result = new List<int>();
-        var remaining = token;
-        var isNonStart = false;
-
-        while (remaining.Length > 0)
-        {
-            if (remaining.Length <= 2)
-            {
-                // Too short to be a subword, use unknown token
-                var unkId = GetTokenId("[UNK]");
-                result.Add(unkId);
-                break;
-            }
-
-            var modified = (isNonStart ? "##" : "") + remaining;
-            var found = false;
-
-            // Try progressively shorter suffixes
-            for (var i = remaining.Length - 1; i >= 1; i--)
-            {
-                var subword = remaining.Substring(0, i);
-                if (_vocab.TryGetValue(modified.Substring(0, subword.Length + (isNonStart ? 2 : 0)), out id))
-                {
-                    result.Add(id);
-                    remaining = remaining.Substring(i);
-                    isNonStart = true;
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found)
-            {
-                var unkId = GetTokenId("[UNK]");
-                result.Add(unkId);
-                break;
-            }
-        }
-
-        return result.Count > 0 ? result.ToArray() : new[] { GetTokenId("[UNK]") };
-    }
-
-    /// <summary>
-    /// Gets the token ID for a given token string.
-    /// </summary>
-    private int GetTokenId(string token)
-    {
-        return _vocab.TryGetValue(token, out var id) ? id : 1; // 1 is typically [UNK]
-    }
-
-    /// <summary>
-    /// Pads or truncates an array to the specified length.
-    /// </summary>
-    private static int[] PadOrTruncate(int[] source, int length, int paddingValue)
-    {
-        if (source.Length >= length)
-            return source[..length];
-
-        var result = new int[length];
-        Array.Copy(source, result, source.Length);
-        for (var i = source.Length; i < length; i++)
-            result[i] = paddingValue;
-
-        return result;
     }
 
     /// <summary>
