@@ -125,13 +125,13 @@ public class Fts5SearchTests
 
         await SaveDocumentAndChunks(sp, doc, chunks);
 
-        // Act — search for "Канал 2"
+        // Act — search for "Канал 2" (lexical OR search for "Канал" OR "2")
         var query = new RetrievalQuery("Канал 2", 10);
         var results = await retriever.SearchAsync(query, CancellationToken.None);
 
-        // Assert
-        Assert.Single(results);
-        Assert.Equal("Измеренное значение Канал 2", results[0].Text);
+        // Assert — first result should contain "Канал 2"
+        Assert.True(results.Count >= 1, "Expected at least 1 result for 'Канал 2'");
+        Assert.Contains("Канал 2", results[0].Text);
     }
 
     [Fact]
@@ -152,8 +152,8 @@ public class Fts5SearchTests
 
         await SaveDocumentAndChunks(sp, doc, chunks);
 
-        // Act — TopK = 2
-        var query = new RetrievalQuery("Текст", 2);
+        // Act — use explicit CandidateTopK to limit results
+        var query = new RetrievalQuery("Текст", 2, candidateTopK: 2);
         var results = await retriever.SearchAsync(query, CancellationToken.None);
 
         // Assert
@@ -175,8 +175,8 @@ public class Fts5SearchTests
 
         await SaveDocumentAndChunks(sp, doc, chunks);
 
-        // Act
-        var query = new RetrievalQuery("Текст", 1);
+        // Act — use explicit CandidateTopK to limit results
+        var query = new RetrievalQuery("Текст", 1, candidateTopK: 1);
         var results = await retriever.SearchAsync(query, CancellationToken.None);
 
         // Assert

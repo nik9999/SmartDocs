@@ -6,7 +6,7 @@ namespace Rag.Infrastructure.Search;
 
 /// <summary>
 /// FTS5-based sparse retriever for document chunks.
-/// Uses SQLite FTS5 with bm25 ranking.
+/// Uses SQLite FTS5 with bm25 ranking and lexical (token-based) search.
 /// </summary>
 public sealed class Fts5Search : ISparseRetriever
 {
@@ -27,9 +27,10 @@ public sealed class Fts5Search : ISparseRetriever
         if (string.IsNullOrWhiteSpace(query.Text))
             return results;
 
-        // Escape user query for FTS5 MATCH to prevent syntax errors.
-        // Wrap terms in quotes for exact phrase matching.
-        var escapedQuery = EscapeFts5Query(query.Text);
+        // Build FTS5 query: lexical search with individual token matching.
+        // If user explicitly uses FTS5 operators (AND, OR, NOT, NEAR, phrase), use as-is.
+        // Otherwise, split into tokens and join with OR.
+        var fts5Query = BuildFts5Query(query.Text);
 
         var sql = """
             SELECT
@@ -48,8 +49,8 @@ public sealed class Fts5Search : ISparseRetriever
 
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
-        command.Parameters.AddWithValue("@query", escapedQuery);
-        command.Parameters.AddWithValue("@topK", query.TopK);
+        command.Parameters.AddWithValue("@query", fts5Query);
+        command.Parameters.AddWithValue("@topK", query.CandidateTopK);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
@@ -80,15 +81,161 @@ public sealed class Fts5Search : ISparseRetriever
     }
 
     /// <summary>
-    /// Escapes user input for safe FTS5 MATCH usage.
-    /// Wraps the entire query in quotes for phrase matching,
-    /// and escapes any quotes within the text.
+    /// Builds a safe FTS5 MATCH query from user input.
+    /// Uses lexical (token-based) search by default.
+    /// If the query contains explicit FTS5 operators, uses it as-is.
     /// </summary>
-    private static string EscapeFts5Query(string query)
+    private static string BuildFts5Query(string userQuery)
     {
-        // Escape double quotes by doubling them (FTS5 syntax)
-        var escaped = query.Replace("\"", "\"\"");
-        // Wrap in quotes for phrase matching
-        return $"\"{escaped}\"";
+        // Check if the query already contains FTS5 operators — if so, use as-is
+        var upperQuery = userQuery.ToUpperInvariant();
+        if (ContainsFts5Operator(upperQuery))
+            return EscapeFts5Tokens(userQuery);
+
+        // Lexical search: split into tokens and join with OR
+        var tokens = SplitIntoTokens(userQuery);
+
+        if (tokens.Length == 0)
+            return "*"; // Match everything
+
+        // Escape tokens, filtering out FTS5 operators
+        var escapedTokens = tokens
+            .Select(t => EscapeFts5Token(t))
+            .Where(t => t != null)
+            .ToArray();
+
+        if (escapedTokens.Length == 0)
+            return "*"; // All tokens were operators
+
+        if (escapedTokens.Length == 1)
+            return escapedTokens[0]!;
+
+        // Multiple tokens: OR search
+        return string.Join(" OR ", escapedTokens);
+    }
+
+    /// <summary>
+    /// Checks if the query text contains explicit FTS5 operators.
+    /// Only considers well-formed FTS5 syntax (not user quotes in regular text).
+    /// </summary>
+    private static bool ContainsFts5Operator(string upperQuery)
+    {
+        // Check for explicit FTS5 syntax patterns
+        // AND, OR, NOT as standalone operators (not part of words)
+        // NEAR operator
+        var operators = new[] { " AND ", " OR ", " NOT ", " NEAR " };
+        foreach (var op in operators)
+        {
+            if (upperQuery.Contains(op))
+                return true;
+        }
+
+        // Check for NOT at end: "word NOT"
+        if (upperQuery.EndsWith(" NOT"))
+            return true;
+
+        // Check for NEAR syntax: "word NEAR/word"
+        if (upperQuery.Contains("NEAR/"))
+            return true;
+
+        // Check for well-formed phrase query: starts and ends with quotes
+        // e.g., "word word" — this is a valid FTS5 phrase query
+        if (upperQuery.StartsWith("\"") && upperQuery.EndsWith("\""))
+        {
+            // Make sure it's not just a single quote in the middle
+            var inner = upperQuery[1..^1];
+            if (!inner.Contains("\""))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Splits user text into tokens, preserving quoted phrases.
+    /// </summary>
+    private static string[] SplitIntoTokens(string text)
+    {
+        var tokens = new List<string>();
+        var current = new System.Text.StringBuilder();
+        bool inQuote = false;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+
+            if (c == '"')
+            {
+                if (inQuote && current.Length > 0)
+                {
+                    // End of quoted phrase — treat as single token
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                    inQuote = false;
+                }
+                else if (!inQuote)
+                {
+                    // Start of quoted phrase
+                    if (current.Length > 0)
+                    {
+                        tokens.Add(current.ToString());
+                        current.Clear();
+                    }
+                    inQuote = true;
+                }
+            }
+            else if (char.IsWhiteSpace(c) && !inQuote)
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+            }
+            else
+            {
+                current.Append(c);
+            }
+        }
+
+        if (current.Length > 0)
+            tokens.Add(current.ToString());
+
+        return tokens.ToArray();
+    }
+
+    /// <summary>
+    /// Escapes a single token for safe FTS5 usage.
+    /// Escapes special characters: " → "", * → \*, : → \:
+    /// Skips pure FTS5 operators (+, NOT, AND, OR, NEAR) as they would cause syntax errors.
+    /// </summary>
+    private static string? EscapeFts5Token(string token)
+    {
+        // Skip pure FTS5 operators that would cause syntax errors
+        var upper = token.ToUpperInvariant();
+        if (upper == "+" || upper == "NOT" || upper == "AND" || upper == "OR" || upper == "NEAR")
+            return null;
+
+        var escaped = token
+            .Replace("\"", "\"\"")
+            .Replace("*", "\\*")
+            .Replace(":", "\\:");
+
+        return escaped;
+    }
+
+    /// <summary>
+    /// Escapes tokens in a query that will be used as-is (when user provides FTS5 operators).
+    /// </summary>
+    private static string EscapeFts5Tokens(string query)
+    {
+        // For queries with explicit FTS5 operators, we still need to escape
+        // special characters within unquoted terms.
+        // Simple approach: escape the known special chars.
+        return query
+            .Replace("\\", "\\\\")
+            .Replace("*", "\\*")
+            .Replace("+", "\\+")
+            .Replace("\"", "\"\"");
     }
 }

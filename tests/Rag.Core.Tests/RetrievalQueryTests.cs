@@ -52,7 +52,7 @@ public class RetrievalQueryTests
         var filters = new RetrievalFilters(new Dictionary<string, string> { { "key", "value" } });
 
         // Act
-        var query = new RetrievalQuery("query", 5, filters);
+        var query = new RetrievalQuery("query", 5, filters: filters);
 
         // Assert
         Assert.Single(query.Filters.Items);
@@ -63,10 +63,39 @@ public class RetrievalQueryTests
     public void Constructor_WithNullFilters_UsesDefault()
     {
         // Act
-        var query = new RetrievalQuery("query", 5, null);
+        var query = new RetrievalQuery("query", 5, filters: null);
 
         // Assert
         Assert.NotNull(query.Filters);
         Assert.Empty(query.Filters.Items);
+    }
+
+    [Fact]
+    public void Constructor_DefaultCandidateTopK_IsFifty()
+    {
+        // Act
+        var query = new RetrievalQuery("query", 5);
+
+        // Assert
+        Assert.Equal(RetrievalConstants.DefaultCandidateTopK, query.CandidateTopK);
+        Assert.Equal(5, query.FinalTopK);
+    }
+
+    [Fact]
+    public void Constructor_CustomCandidateTopK_IsStored()
+    {
+        // Act
+        var query = new RetrievalQuery("query", 5, candidateTopK: 100);
+
+        // Assert
+        Assert.Equal(100, query.CandidateTopK);
+        Assert.Equal(5, query.FinalTopK);
+    }
+
+    [Fact]
+    public void Constructor_CandidateTopKLessThanFinalTopK_ThrowsArgumentException()
+    {
+        // Act & Assert
+        Assert.Throws<ArgumentException>(() => new RetrievalQuery("query", 10, candidateTopK: 5));
     }
 }

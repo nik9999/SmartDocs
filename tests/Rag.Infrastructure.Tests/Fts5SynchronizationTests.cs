@@ -70,33 +70,33 @@ public class Fts5SynchronizationTests
         var repo = sp.GetRequiredService<IDocumentRepository>();
         var docId = Guid.NewGuid();
 
-        // Save first version
+        // Save first version — use unique tokens that won't match the new version
         var doc1 = new Document(docId, "Title 1", "Content 1", "source1", new Dictionary<string, string>());
         var chunks1 = new[]
         {
-            new DocumentChunk(docId, "Старый текст для поиска", 0)
+            new DocumentChunk(docId, "Архивный документ устаревший текст", 0)
         };
         await repo.SaveAsync(doc1, chunks1, CancellationToken.None);
 
         // Verify old chunk is found
-        var oldResults = await retriever.SearchAsync(new RetrievalQuery("Старый текст", 10), CancellationToken.None);
+        var oldResults = await retriever.SearchAsync(new RetrievalQuery("Архивный", 10), CancellationToken.None);
         Assert.Single(oldResults);
 
         // Replace with new version
         var doc2 = new Document(docId, "Title 2", "Content 2", "source2", new Dictionary<string, string>());
         var chunks2 = new[]
         {
-            new DocumentChunk(docId, "Новый текст для поиска", 0)
+            new DocumentChunk(docId, "Актуальный документ новый текст", 0)
         };
         await repo.SaveAsync(doc2, chunks2, CancellationToken.None);
 
-        // Assert — old chunk should NOT be found, new chunk should be
-        var newResults = await retriever.SearchAsync(new RetrievalQuery("Старый текст", 10), CancellationToken.None);
+        // Assert — old chunk should NOT be found (unique token "Архивный" not in new version)
+        var newResults = await retriever.SearchAsync(new RetrievalQuery("Архивный", 10), CancellationToken.None);
         Assert.Empty(newResults);
 
-        var updatedResults = await retriever.SearchAsync(new RetrievalQuery("Новый текст", 10), CancellationToken.None);
+        var updatedResults = await retriever.SearchAsync(new RetrievalQuery("Актуальный", 10), CancellationToken.None);
         Assert.Single(updatedResults);
-        Assert.Contains("Новый текст", updatedResults[0].Text);
+        Assert.Contains("Актуальный", updatedResults[0].Text);
     }
 
     [Fact]
@@ -199,9 +199,9 @@ public class Fts5SynchronizationTests
         var repo = sp.GetRequiredService<IDocumentRepository>();
         var db = sp.GetRequiredService<SqliteDatabase>();
 
-        // Save a document first
+        // Save a document first — use unique tokens
         var doc1 = new Document("Base", "Базовый документ", "source", new Dictionary<string, string>());
-        var chunks1 = new[] { new DocumentChunk(doc1.DocumentId, "Базовый текст", 0) };
+        var chunks1 = new[] { new DocumentChunk(doc1.DocumentId, "Базовый эталонный текст", 0) };
         await repo.SaveAsync(doc1, chunks1, CancellationToken.None);
 
         // Verify base document is searchable
@@ -213,7 +213,7 @@ public class Fts5SynchronizationTests
 
         // Save a replacement document — this should replace the old data
         var doc2 = new Document(doc1.DocumentId, "Base v2", "Content v2", "source2", new Dictionary<string, string>());
-        var chunks2 = new[] { new DocumentChunk(doc1.DocumentId, "Новый текст", 0) };
+        var chunks2 = new[] { new DocumentChunk(doc1.DocumentId, "Обновлённый актуальный текст", 0) };
         await repo.SaveAsync(doc2, chunks2, CancellationToken.None);
 
         // Assert — FTS should have exactly 1 entry (the new one)
@@ -221,14 +221,14 @@ public class Fts5SynchronizationTests
         var finalCount = Convert.ToInt32(await cmd.ExecuteScalarAsync());
         Assert.Equal(1, finalCount);
 
-        // And the old text should not be searchable
+        // And the old text should not be searchable (unique token "эталонный" not in new version)
         var oldResults = await sp.GetRequiredService<ISparseRetriever>()
-            .SearchAsync(new RetrievalQuery("Базовый текст", 10), CancellationToken.None);
+            .SearchAsync(new RetrievalQuery("эталонный", 10), CancellationToken.None);
         Assert.Empty(oldResults);
 
-        // And the new text should be searchable
+        // And the new text should be searchable (unique token "обновлённый" not in old version)
         var newResults = await sp.GetRequiredService<ISparseRetriever>()
-            .SearchAsync(new RetrievalQuery("Новый текст", 10), CancellationToken.None);
+            .SearchAsync(new RetrievalQuery("обновлённый", 10), CancellationToken.None);
         Assert.Single(newResults);
     }
 }

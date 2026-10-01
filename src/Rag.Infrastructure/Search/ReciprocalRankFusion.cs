@@ -6,6 +6,7 @@ using Rag.Core.Retrieval;
 /// <summary>
 /// Reciprocal Rank Fusion (RRF) implementation of IResultFusion.
 /// Combines results from multiple retrievers (sparse + dense) using RRF scoring.
+/// Uses 1-based ranking: 1 / (K + rank) where rank = 1, 2, 3, ...
 /// </summary>
 public sealed class ReciprocalRankFusion : IResultFusion
 {
@@ -40,12 +41,14 @@ public sealed class ReciprocalRankFusion : IResultFusion
             if (resultSet == null)
                 continue;
 
-            for (int rank = 0; rank < resultSet.Count; rank++)
+            // Use 1-based rank: position 0 in the list = rank 1
+            for (int position = 0; position < resultSet.Count; position++)
             {
-                var result = resultSet[rank];
+                var result = resultSet[position];
                 var chunkId = result.ChunkId;
 
-                // RRF contribution: 1 / (k + rank) where rank is 0-based
+                // RRF contribution: 1 / (k + rank) where rank is 1-based
+                double rank = position + 1;
                 double contribution = 1.0 / (RrfConstant + rank);
 
                 if (rrfScores.TryGetValue(chunkId, out var existingScore))
