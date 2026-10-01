@@ -1,0 +1,10 @@
+<Solution>
+  <Project Path="src/Rag.Core/Rag.Core.csproj" />
+  <Project Path="src/Rag.Application/Rag.Application.csproj" />
+  <Project Path="src/Rag.Infrastructure/Rag.Infrastructure.csproj" />
+  <Project Path="src/Rag.Api/Rag.Api.csproj" />
+  <Project Path="tests/Rag.Core.Tests/Rag.Core.Tests.csproj" />
+  <Project Path="tests/Rag.Application.Tests/Rag.Application.Tests.csproj" />
+  <Project Path="tests/Rag.Infrastructure.Tests/Rag.Infrastructure.Tests.csproj" />
+  <Project Path="tests/Rag.IntegrationTests/Rag.IntegrationTests.csproj" />
+</Solution>

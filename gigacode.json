@@ -1,0 +1,21 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "mcp": {
+    "avalonia-docs": {
+      "type": "remote",
+      "url": "https://docs-mcp.avaloniaui.net/mcp"
+    },
+    "microsoft-learn": {
+      "type": "remote",
+      "url": "https://learn.microsoft.com/api/mcp"
+    }
+    //,
+    // "avalonia_devtools": {
+    //   "type": "local",
+    //   // Or ["bun", "x", "my-mcp-command"]
+    //   "command": ["avdt", "-mcp"],
+    //   "enabled": true
+    //   },
+  }
+}
