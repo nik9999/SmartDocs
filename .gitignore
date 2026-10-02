@@ -93,3 +93,4 @@ Desktop.ini
 
 # Recycle bin
 $RECYCLE.BIN/
+models/paraphrase-multilingual-MiniLM-L12-v2/model.onnx

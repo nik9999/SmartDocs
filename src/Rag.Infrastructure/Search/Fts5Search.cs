@@ -206,8 +206,11 @@ public sealed class Fts5Search : ISparseRetriever
 
     /// <summary>
     /// Escapes a single token for safe FTS5 usage.
-    /// Escapes special characters: " → "", * → \*, : → \:
+    /// Escapes special characters: " → "", * → \*, : → \-, - → \-, / → \/
     /// Skips pure FTS5 operators (+, NOT, AND, OR, NEAR) as they would cause syntax errors.
+    ///
+    /// Technical identifiers like "RS-485" and "TCP/IP" are preserved as searchable tokens
+    /// by escaping the special characters within them rather than stripping them.
     /// </summary>
     private static string? EscapeFts5Token(string token)
     {
@@ -219,7 +222,9 @@ public sealed class Fts5Search : ISparseRetriever
         var escaped = token
             .Replace("\"", "\"\"")
             .Replace("*", "\\*")
-            .Replace(":", "\\:");
+            .Replace(":", "\\:")
+            .Replace("-", "\\-")
+            .Replace("/", "\\/");
 
         return escaped;
     }
@@ -231,11 +236,13 @@ public sealed class Fts5Search : ISparseRetriever
     {
         // For queries with explicit FTS5 operators, we still need to escape
         // special characters within unquoted terms.
-        // Simple approach: escape the known special chars.
+        // Escape known special chars including technical identifiers.
         return query
             .Replace("\\", "\\\\")
             .Replace("*", "\\*")
             .Replace("+", "\\+")
-            .Replace("\"", "\"\"");
+            .Replace("\"", "\"\"")
+            .Replace("-", "\\-")
+            .Replace("/", "\\/");
     }
 }

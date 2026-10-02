@@ -5,11 +5,13 @@ using Rag.Application.Retrieval;
 using Rag.Core.Contracts;
 using Rag.Core.Documents;
 using Rag.Core.Embeddings;
+using Rag.Infrastructure.Chunking;
 using Rag.Infrastructure.Configuration;
 using Rag.Infrastructure.Embeddings;
 using Rag.Infrastructure.Persistence;
 using Rag.Infrastructure.Persistence.Repositories;
 using Rag.Infrastructure.Search;
+using Tokenizers.DotNet;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -185,12 +187,26 @@ public class RetrievalBaselineTests : IDisposable
         var initializer = _serviceProvider.GetRequiredService<DatabaseInitializer>();
         await initializer.InitializeAsync();
 
+        // Create tokenizer and token-aware chunker
+        var tokenizerPath = Path.Combine(ModelPath, "tokenizer.json");
+        Tokenizer? tokenizer = null;
+        if (File.Exists(tokenizerPath))
+        {
+            tokenizer = new Tokenizer(vocabPath: tokenizerPath);
+        }
+
+        TokenAwareChunker? chunker = null;
+        if (tokenizer != null)
+        {
+            chunker = new TokenAwareChunker(tokenizer, targetChunkTokens: 256, maxChunkTokens: 384, overlapTokens: 48);
+        }
+
         // Seed documents with real content matching golden queries
         var embeddingGen = _serviceProvider.GetRequiredService<IEmbeddingGenerator>();
         var docRepo = _serviceProvider.GetRequiredService<IDocumentRepository>();
         var embRepo = _serviceProvider.GetRequiredService<IEmbeddingRepository>();
 
-        var seedDocuments = CreateSeedDocuments();
+        var seedDocuments = CreateSeedDocuments(chunker);
         var stats = new SetupStatistics
         {
             DocumentCount = 0,
@@ -213,6 +229,9 @@ public class RetrievalBaselineTests : IDisposable
             stats.ChunkCount += seedDoc.Chunks.Count;
             stats.DocumentCount++;
         }
+
+        // Dispose tokenizer if created
+        tokenizer?.Dispose();
 
         return stats;
     }
@@ -265,13 +284,13 @@ public class RetrievalBaselineTests : IDisposable
         }
     }
 
-    private IReadOnlyList<SeedDocument> CreateSeedDocuments()
+    private IReadOnlyList<SeedDocument> CreateSeedDocuments(TokenAwareChunker? chunker)
     {
         // Create documents with content matching the golden query terminology
         // Each document uses a specific DocumentId so golden dataset can reference them
         return new List<SeedDocument>
         {
-            // Document 1: Sensor documentation (for queries about "Кана�� 2", "датчик")
+            // Document 1: Sensor documentation (for queries about "Канал 2", "датчик")
             CreateSeedDocument(
                 Guid.Parse("a1b2c3d4-e5f6-7890-abcd-ef1234567891"),
                 "Техническая документация датчиков",
@@ -285,7 +304,8 @@ public class RetrievalBaselineTests : IDisposable
                     " интерфейсы для передачи данных с датчика на систему мониторинга.",
                     "Штатный режим работы датчика предполагает непрерывный сбор данных с частотой" +
                     " 1 Гц. При отклонении параметров от нормы система генерирует предупреждение."
-                }),
+                },
+                chunker),
 
             // Document 2: System pressure and monitoring (for queries about "давление", "температура", "аварийный сигнал")
             CreateSeedDocument(
@@ -304,7 +324,8 @@ public class RetrievalBaselineTests : IDisposable
                     " нормальную работу системы оповещения.",
                     "Данные мониторинга сохраняются в базе данных для последующего анализа." +
                     " Система мониторинга обеспечивает непрерывный контроль параметров."
-                }),
+                },
+                chunker),
 
             // Document 3: Voltage and electrical monitoring (for queries about "мониторинг", "напряжение фаза")
             CreateSeedDocument(
@@ -321,7 +342,8 @@ public class RetrievalBaselineTests : IDisposable
                     "Система мониторинга фиксирует перекос фаз, короткое замыкание и другие" +
                     " аномалии. Канал 1, Канал 2, Канал 3 используются для передачи данных" +
                     " о напряжении на диспетчерский пункт."
-                }),
+                },
+                chunker),
 
             // Document 4: Power metrics (for queries about "частота сети", "активная мощность", "реактивная мощность")
             CreateSeedDocument(
@@ -338,7 +360,8 @@ public class RetrievalBaselineTests : IDisposable
                     "Реактивная мощность варcos фи необходима для создания магнитного поля" +
                     " в электродвигателях и трансформаторах. Реактивная мощность не совершает" +
                     " полезной работы, но увеличивает нагрузку на сеть."
-                }),
+                },
+                chunker),
 
             // Document 5: Protection systems (for queries about "ток короткого замыкания", "дифференциальная защита")
             CreateSeedDocument(
@@ -347,7 +370,7 @@ public class RetrievalBaselineTests : IDisposable
                 new[]
                 {
                     "Ток короткого замыкания номинальный рассчитывается для выбора аппаратов" +
-                    " защиты. Номинальный ток — это максимальный ток, который оборудование" +
+                    " защиты. Номинальный ток — это максимальный ток, которое оборудование" +
                     " может длительно выдерживать без перегрева.",
                     "Дифференциальная защита ток утечки применяется для защиты людей от" +
                     " поражения электрическим током. Утечка тока через изоляцию может" +
@@ -355,24 +378,34 @@ public class RetrievalBaselineTests : IDisposable
                     "Принцип работы дифференциальной защиты основан на сравнении тока в" +
                     " фазном и нулевом проводнике. При обнаружении разницы (утечки тока)" +
                     " защита мгновенно отключает цепь."
-                })
+                },
+                chunker)
         };
     }
 
-    private static SeedDocument CreateSeedDocument(Guid documentId, string title, string[] chunkTexts)
+    private static SeedDocument CreateSeedDocument(
+        Guid documentId,
+        string title,
+        string[] chunkTexts,
+        TokenAwareChunker? chunker)
     {
-        var chunks = new List<DocumentChunk>();
-        for (var i = 0; i < chunkTexts.Length; i++)
-        {
-            chunks.Add(new DocumentChunk(documentId, chunkTexts[i], i, ChunkMetadata.Empty));
-        }
+        var fullContent = string.Join("\n\n", chunkTexts);
 
         var document = new Document(
             documentId,
             title,
-            string.Join(" ", chunkTexts),
+            fullContent,
             "seed",
             new Dictionary<string, string>());
+
+        // Use TokenAwareChunker to create token-aware chunks
+        var chunks = chunker != null
+            ? chunker.Chunk(document)
+            : new List<DocumentChunk>
+            {
+                new DocumentChunk(documentId, fullContent, 0, ChunkMetadata.Empty)
+            };
+
         return new SeedDocument(document, chunks);
     }
 

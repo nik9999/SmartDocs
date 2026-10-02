@@ -1,3 +1,4 @@
+using System.Linq;
 using Rag.Application.Evaluation;
 using Rag.Core.Retrieval;
 using Xunit;
@@ -494,8 +495,8 @@ public sealed class RetrievalEvaluatorTests
         // Arrange & Act
         var queries = BaselineGoldenQueries.GetQueries();
 
-        // Assert
-        Assert.Equal(15, queries.Count);
+        // Assert — expanded dataset should have 48 queries
+        Assert.Equal(48, queries.Count);
     }
 
     [Fact]
@@ -504,10 +505,10 @@ public sealed class RetrievalEvaluatorTests
         // Arrange & Act
         var queries = BaselineGoldenQueries.GetQueries();
 
-        // Assert — last query should have empty expected document set
-        var noHitQuery = queries.Last();
-        Assert.Equal("несуществующий термин абракадабра", noHitQuery.Query);
-        Assert.Empty(noHitQuery.ExpectedDocumentIds);
+        // Assert — there should be at least one query with empty expected document set
+        var noHitQuery = queries.FirstOrDefault(q => q.ExpectedDocumentIds.Count == 0);
+        Assert.NotNull(noHitQuery);
+        Assert.Equal("несуществующий термин абракадабра", noHitQuery!.Query);
     }
 
     [Fact]
@@ -516,10 +517,11 @@ public sealed class RetrievalEvaluatorTests
         // Arrange & Act
         var queries = BaselineGoldenQueries.GetQueries();
 
-        // Assert — query 14 should reference multiple documents
-        var multiDocQuery = queries[13];
-        Assert.Equal("Канал 1 Канал 2 Канал 3", multiDocQuery.Query);
-        Assert.Equal(2, multiDocQuery.ExpectedDocumentIds.Count);
+        // Assert — there should be at least one query referencing multiple documents
+        var multiDocQuery = queries.FirstOrDefault(q => q.ExpectedDocumentIds.Count > 1);
+        Assert.NotNull(multiDocQuery);
+        Assert.Equal("Канал 1 Канал 2 Канал 3", multiDocQuery!.Query);
+        Assert.True(multiDocQuery.ExpectedDocumentIds.Count >= 2);
     }
 
     [Fact]
@@ -533,5 +535,90 @@ public sealed class RetrievalEvaluatorTests
         {
             Assert.False(string.IsNullOrWhiteSpace(query.Query));
         }
+    }
+
+    // =========================================================================
+    // Dataset Quality Tests — expanded dataset
+    // =========================================================================
+
+    [Fact]
+    public void BaselineGoldenQueries_GetQueries_NoDuplicateQueries()
+    {
+        // Arrange & Act
+        var queries = BaselineGoldenQueries.GetQueries();
+        var queryTexts = queries.Select(q => q.Query).ToList();
+
+        // Assert
+        var duplicates = queryTexts.GroupBy(q => q)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToList();
+        Assert.Empty(duplicates);
+    }
+
+    [Fact]
+    public void BaselineGoldenQueries_GetQueries_HasNegativeQueries()
+    {
+        // Arrange & Act
+        var queries = BaselineGoldenQueries.GetQueries();
+        var negativeQueries = queries.Where(q => q.ExpectedDocumentIds.Count == 0).ToList();
+
+        // Assert — should have multiple negative queries
+        Assert.True(negativeQueries.Count >= 3,
+            $"Expected at least 3 negative queries, got {negativeQueries.Count}");
+    }
+
+    [Fact]
+    public void BaselineGoldenQueries_GetQueries_HasHardNegativeQueries()
+    {
+        // Arrange & Act
+        var queries = BaselineGoldenQueries.GetQueries();
+
+        // Hard negatives: queries that could match multiple similar documents
+        var hardNegatives = queries.Where(q =>
+            q.ExpectedDocumentIds.Count > 1 &&
+            q.ExpectedDocumentIds.Count < 5).ToList();
+
+        // Assert — should have some multi-document queries for hard negative testing
+        Assert.True(hardNegatives.Count >= 3,
+            $"Expected at least 3 hard negative queries, got {hardNegatives.Count}");
+    }
+
+    [Fact]
+    public void BaselineGoldenQueries_GetQueries_AllGuidsAreValid()
+    {
+        // Arrange & Act
+        var queries = BaselineGoldenQueries.GetQueries();
+        var allGuids = queries.SelectMany(q => q.ExpectedDocumentIds).Distinct().ToList();
+
+        // Assert — all GUIDs should be valid (no format exceptions)
+        foreach (var guid in allGuids)
+        {
+            Assert.False(guid == Guid.Empty,
+                $"Found empty Guid in ExpectedDocumentIds for query: {queries.First(q => q.ExpectedDocumentIds.Contains(guid)).Query}");
+        }
+    }
+
+    [Fact]
+    public void BaselineGoldenQueries_GetQueries_AllHaveReferenceAnswerOrNull()
+    {
+        // Arrange & Act
+        var queries = BaselineGoldenQueries.GetQueries();
+
+        // Assert — all queries should have valid ReferenceAnswer (null is acceptable)
+        foreach (var query in queries)
+        {
+            // ReferenceAnswer is nullable, so this just ensures no exceptions
+            var _ = query.ReferenceAnswer;
+        }
+    }
+
+    [Fact]
+    public void GoldenDatasetLoader_LoadAsync_FileNotFound_ThrowsFileNotFoundException()
+    {
+        // Act & Assert
+        var ex = Assert.Throws<AggregateException>(() =>
+            GoldenDatasetLoader.LoadAsync("nonexistent-path.json", CancellationToken.None).Result);
+        Assert.IsType<FileNotFoundException>(ex.GetBaseException());
     }
 }

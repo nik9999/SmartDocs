@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text.Json;
 using Rag.Application.Evaluation;
 using Xunit;
@@ -152,5 +153,98 @@ public sealed class GoldenDatasetLoaderTests
         // Assert
         Assert.Single(queries);
         Assert.Null(queries[0].ReferenceAnswer);
+    }
+
+    [Fact]
+    public void ParseJson_ExpandedDataset_HasExpectedCount()
+    {
+        // Arrange — expanded golden dataset JSON
+        var json = File.ReadAllText(
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory!,
+                "..", "..", "..", "..", "..",
+                "tests", "Rag.Application.Tests", "Evaluation", "Data", "golden-queries.json"));
+
+        // Act
+        var queries = GoldenDatasetLoader.ParseJson(json);
+
+        // Assert — should have ~49 queries
+        Assert.True(queries.Count >= 40 && queries.Count <= 55,
+            $"Expected 40-55 queries, got {queries.Count}");
+    }
+
+    [Fact]
+    public void ParseJson_ExpandedDataset_NoDuplicateQueries()
+    {
+        // Arrange
+        var json = File.ReadAllText(
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory!,
+                "..", "..", "..", "..", "..",
+                "tests", "Rag.Application.Tests", "Evaluation", "Data", "golden-queries.json"));
+
+        // Act
+        var queries = GoldenDatasetLoader.ParseJson(json);
+        var queryTexts = queries.Select(q => q.Query).ToList();
+
+        // Assert
+        var duplicates = queryTexts.GroupBy(q => q)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToList();
+        Assert.Empty(duplicates);
+    }
+
+    [Fact]
+    public void ParseJson_ExpandedDataset_HasNegativeQueries()
+    {
+        // Arrange
+        var json = File.ReadAllText(
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory!,
+                "..", "..", "..", "..", "..",
+                "tests", "Rag.Application.Tests", "Evaluation", "Data", "golden-queries.json"));
+
+        // Act
+        var queries = GoldenDatasetLoader.ParseJson(json);
+        var negativeQueries = queries.Where(q => q.ExpectedDocumentIds.Count == 0).ToList();
+
+        // Assert
+        Assert.True(negativeQueries.Count >= 3,
+            $"Expected at least 3 negative queries, got {negativeQueries.Count}");
+    }
+
+    [Fact]
+    public void ParseJson_ExpandedDataset_AllQueriesNonEmpty()
+    {
+        // Arrange
+        var json = File.ReadAllText(
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory!,
+                "..", "..", "..", "..", "..",
+                "tests", "Rag.Application.Tests", "Evaluation", "Data", "golden-queries.json"));
+
+        // Act
+        var queries = GoldenDatasetLoader.ParseJson(json);
+
+        // Assert
+        foreach (var query in queries)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(query.Query));
+        }
+    }
+
+    [Fact]
+    public void ParseJson_ExpandedDataset_HasMultiDocQueries()
+    {
+        // Arrange
+        var json = File.ReadAllText(
+            Path.Combine(AppDomain.CurrentDomain.BaseDirectory!,
+                "..", "..", "..", "..", "..",
+                "tests", "Rag.Application.Tests", "Evaluation", "Data", "golden-queries.json"));
+
+        // Act
+        var queries = GoldenDatasetLoader.ParseJson(json);
+        var multiDocQueries = queries.Where(q => q.ExpectedDocumentIds.Count > 1).ToList();
+
+        // Assert
+        Assert.True(multiDocQueries.Count >= 3,
+            $"Expected at least 3 multi-document queries, got {multiDocQueries.Count}");
     }
 }
