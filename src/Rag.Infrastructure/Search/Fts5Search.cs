@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Rag.Core.Contracts;
 using Rag.Core.Retrieval;
+using System.Linq;
 
 namespace Rag.Infrastructure.Search;
 
@@ -206,11 +207,12 @@ public sealed class Fts5Search : ISparseRetriever
 
     /// <summary>
     /// Escapes a single token for safe FTS5 usage.
-    /// Escapes special characters: " → "", * → \*, : → \-, - → \-, / → \/
-    /// Skips pure FTS5 operators (+, NOT, AND, OR, NEAR) as they would cause syntax errors.
+    /// Uses phrase quoting for tokens with special characters to avoid FTS5 syntax errors.
     ///
-    /// Technical identifiers like "RS-485" and "TCP/IP" are preserved as searchable tokens
-    /// by escaping the special characters within them rather than stripping them.
+    /// Technical identifiers like "RS-485", "TCP/IP", "T_sensor", "cos(φ)" are preserved
+    /// as searchable tokens by wrapping them in double quotes.
+    ///
+    /// Pure ASCII words are returned unescaped.
     /// </summary>
     private static string? EscapeFts5Token(string token)
     {
@@ -219,30 +221,33 @@ public sealed class Fts5Search : ISparseRetriever
         if (upper == "+" || upper == "NOT" || upper == "AND" || upper == "OR" || upper == "NEAR")
             return null;
 
-        var escaped = token
-            .Replace("\"", "\"\"")
-            .Replace("*", "\\*")
-            .Replace(":", "\\:")
-            .Replace("-", "\\-")
-            .Replace("/", "\\/");
+        // Check if token contains FTS5 special characters
+        var specialChars = new[] { '"', '\\', '[', ']', '(', ')', '{', '}', '*', '+', '~', ':', '-', '/' };
+        var hasSpecial = token.Any(c => specialChars.Contains(c));
 
-        return escaped;
+        if (hasSpecial)
+        {
+            // Escape internal double quotes and wrap in quotes for exact match
+            var escaped = token.Replace("\"", "\"\"");
+            return $"\"{escaped}\"";
+        }
+
+        return token;
     }
 
     /// <summary>
     /// Escapes tokens in a query that will be used as-is (when user provides FTS5 operators).
+    /// Wraps tokens with special characters in double quotes for safe FTS5 matching.
     /// </summary>
     private static string EscapeFts5Tokens(string query)
     {
-        // For queries with explicit FTS5 operators, we still need to escape
-        // special characters within unquoted terms.
-        // Escape known special chars including technical identifiers.
-        return query
-            .Replace("\\", "\\\\")
-            .Replace("*", "\\*")
-            .Replace("+", "\\+")
-            .Replace("\"", "\"\"")
-            .Replace("-", "\\-")
-            .Replace("/", "\\/");
+        // For queries with explicit FTS5 operators, split and escape individual tokens
+        var tokens = SplitIntoTokens(query);
+        var escapedTokens = tokens
+            .Select(t => EscapeFts5Token(t))
+            .Where(t => t != null)
+            .ToArray();
+
+        return string.Join(" ", escapedTokens);
     }
 }

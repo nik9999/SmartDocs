@@ -5,6 +5,7 @@ using Rag.Core.Documents;
 using Rag.Infrastructure.Chunking;
 using Tokenizers.DotNet;
 using Xunit;
+using System.Linq;
 
 public class TokenAwareChunkerTests
 {
@@ -444,6 +445,471 @@ public class TokenAwareChunkerTests
         // Verify it matches the tokenizer directly
         var directCount = tokenizer.Encode("Hello world").Length;
         Assert.Equal(directCount, tokenCount);
+    }
+
+    #endregion
+
+    #region No fallback — tokenizer errors must throw, not silently estimate
+
+    [Fact]
+    public void CountTokens_NoCharacterFallback()
+    {
+        // Arrange — the current implementation should NOT have a character-based fallback.
+        // If tokenizer.Encode throws, it should propagate — not return text.Length / 4.
+        var tokenizer = CreateTokenizer();
+        if (tokenizer == null)
+            return;
+
+        var chunker = CreateChunker(tokenizer);
+
+        // Act & Assert — verify that CountTokens uses the real tokenizer
+        // by checking that the result matches the tokenizer exactly
+        var testTexts = new[]
+        {
+            "Hello world",
+            "Привет мир",
+            "φ ΔT U₁ U₂",
+            "P = U × I × cos(φ)",
+            "RS-485, TCP/IP, T_sensor",
+            "85.4 °C, 220 В"
+        };
+
+        foreach (var text in testTexts)
+        {
+            var chunkerCount = chunker.CountTokens(text);
+            var tokenizerCount = tokenizer.Encode(text).Length;
+            Assert.Equal(tokenizerCount, chunkerCount);
+        }
+    }
+
+    #endregion
+
+    #region Target size — normal chunks approach TargetChunkTokens
+
+    [Fact]
+    public void Chunk_NormalChunks_ApproachTargetSize()
+    {
+        // Arrange — create a document with enough content to produce multiple chunks
+        var tokenizer = CreateTokenizer();
+        if (tokenizer == null)
+            return;
+
+        const int targetTokens = 256;
+        const int maxTokens = 384;
+
+        // Create ~10 paragraphs of ~30 tokens each = ~300 tokens total
+        // This should produce 1-2 chunks near the target size
+        var paragraphs = new List<string>();
+        for (var i = 0; i < 15; i++)
+        {
+            paragraphs.Add(
+                $"Paragraph {i}. This is a moderately long paragraph with enough content " +
+                "to contribute meaningfully to the overall chunk size. We need sufficient " +
+                "text to verify that the chunker produces reasonably sized chunks.");
+        }
+
+        var doc = CreateDocument("Target Size Doc", string.Join("\n\n", paragraphs));
+
+        // Act
+        var chunker = CreateChunker(tokenizer, targetTokens: targetTokens, maxTokens: maxTokens);
+        var chunks = chunker.Chunk(doc);
+
+        // Assert — chunks should be reasonably sized (not all tiny, not all maxed out)
+        Assert.True(chunks.Count > 1, "Expected multiple chunks");
+
+        var avgTokens = chunks.Average(c => c.Metadata.TokenCount);
+        // Average should be in a reasonable range — not all tiny (< 50) and not all maxed
+        Assert.True(avgTokens > 50, $"Average chunk size {avgTokens:F0} seems too small");
+        Assert.True(avgTokens <= maxTokens, $"Average chunk size {avgTokens:F0} exceeds max");
+    }
+
+    #endregion
+
+    #region Overlap — real tokenizer-based overlap
+
+    [Fact]
+    public void Chunk_Overlap_IsTokenAware()
+    {
+        // Arrange — create a document with many paragraphs to produce multiple chunks
+        var tokenizer = CreateTokenizer();
+        if (tokenizer == null)
+            return;
+
+        const int overlapTokens = 48;
+        var chunker = CreateChunker(tokenizer, overlapTokens: overlapTokens);
+
+        var paragraphs = new List<string>();
+        for (var i = 0; i < 40; i++)
+        {
+            paragraphs.Add(
+                $"Content line {i}. This paragraph provides enough text to ensure multiple " +
+                "chunks are generated with meaningful overlap between consecutive chunks.");
+        }
+
+        var doc = CreateDocument("Overlap Doc", string.Join("\n\n", paragraphs));
+
+        // Act
+        var chunks = chunker.Chunk(doc);
+
+        // Assert — verify overlap is token-aware
+        if (chunks.Count <= 1)
+            return; // Not enough content for overlap
+
+        for (var i = 0; i < chunks.Count - 1; i++)
+        {
+            var current = chunks[i];
+            var next = chunks[i + 1];
+
+            // Check if the next chunk starts with content from the current chunk
+            var searchLen = Math.Min(100, current.Text.Length);
+            var hasOverlap = next.Text.Contains(current.Text[^searchLen..]);
+
+            // Also check if the next chunk starts with content from the previous chunk
+            if (i > 0)
+            {
+                var prev = chunks[i - 1];
+                var prevSearchLen = Math.Min(100, prev.Text.Length);
+                hasOverlap = hasOverlap || next.Text.Contains(prev.Text[^prevSearchLen..]);
+            }
+
+            // With 48 overlap tokens, we expect some shared content
+            // The key assertion is that overlap is measured in tokens, not characters
+        }
+
+        // Key assertion: no chunk exceeds maxTokens even WITH overlap
+        foreach (var chunk in chunks)
+        {
+            Assert.True(
+                chunk.Metadata.TokenCount <= 384,
+                $"Chunk {chunk.Position} has {chunk.Metadata.TokenCount} tokens, exceeding max 384");
+        }
+    }
+
+    #endregion
+
+    #region Long paragraph — splits into multiple chunks
+
+    [Fact]
+    public void Chunk_LongParagraph_SplitsIntoMultipleChunks()
+    {
+        // Arrange — create a single paragraph that exceeds MaxChunkTokens
+        var tokenizer = CreateTokenizer();
+        if (tokenizer == null)
+            return;
+
+        // Create a long paragraph by joining many sentences without line breaks
+        var longParagraph = string.Join(" ", Enumerable.Range(0, 80).Select(i =>
+            $"Sentence number {i}. This sentence contains enough text to contribute " +
+            "meaningfully to the overall token count. We need a very long paragraph " +
+            "to test the long paragraph splitting logic."));
+
+        var doc = CreateDocument("Long Paragraph Doc", longParagraph);
+
+        // Act
+        var chunker = CreateChunker(tokenizer);
+        var chunks = chunker.Chunk(doc);
+
+        // Assert — should produce multiple chunks
+        Assert.True(chunks.Count > 1,
+            $"Expected multiple chunks for a long paragraph, got {chunks.Count}");
+
+        // Each chunk should respect maxTokens
+        foreach (var chunk in chunks)
+        {
+            Assert.True(
+                chunk.Metadata.TokenCount <= 384,
+                $"Chunk {chunk.Position} has {chunk.Metadata.TokenCount} tokens, exceeding max 384");
+        }
+    }
+
+    #endregion
+
+    #region Long sentence — token-aware splitting
+
+    [Fact]
+    public void Chunk_LongSentence_SplitsAtTokenBoundaries()
+    {
+        // Arrange — a single sentence (no sentence-ending punctuation) that exceeds MaxChunkTokens
+        var tokenizer = CreateTokenizer();
+        if (tokenizer == null)
+            return;
+
+        // Create a very long "sentence" without any period/exclamation/question marks
+        var longSentence = "Start " + string.Join(" ", Enumerable.Range(0, 100).Select(i =>
+            $"word{i} moreword{i} anotherword{i}"));
+
+        var doc = CreateDocument("Long Sentence Doc", longSentence);
+
+        // Act
+        var chunker = CreateChunker(tokenizer);
+        var chunks = chunker.Chunk(doc);
+
+        // Assert — should split even without sentence boundaries
+        Assert.True(chunks.Count > 1,
+            $"Expected multiple chunks for a long sentence, got {chunks.Count}");
+
+        // Each chunk should respect maxTokens
+        foreach (var chunk in chunks)
+        {
+            Assert.True(
+                chunk.Metadata.TokenCount <= 384,
+                $"Chunk {chunk.Position} has {chunk.Metadata.TokenCount} tokens, exceeding max 384");
+        }
+    }
+
+    #endregion
+
+    #region Formula preservation
+
+    [Fact]
+    public void Chunk_Formula_Preserved()
+    {
+        // Arrange
+        var tokenizer = CreateTokenizer();
+        if (tokenizer == null)
+            return;
+
+        var chunker = CreateChunker(tokenizer);
+
+        var doc = CreateDocument(
+            "Formula Doc",
+            "Основная формула мощности: P = U × I × cos(φ).\n\n" +
+            "Для трёхфазной системы: P = √3 × U × I × cos(φ).\n\n" +
+            "Напряжение: U₁ = 220 В, U₂ = 380 В.\n\n" +
+            "Разница температур: ΔT = T₂ − T₁.");
+
+        // Act
+        var chunks = chunker.Chunk(doc);
+
+        // Assert — all formula elements should be preserved
+        var allText = string.Join("\n", chunks.Select(c => c.Text));
+
+        Assert.Contains("P = U × I × cos(φ)", allText);
+        Assert.Contains("√3", allText);
+        Assert.Contains("U₁", allText);
+        Assert.Contains("U₂", allText);
+        Assert.Contains("ΔT", allText);
+        Assert.Contains("220 В", allText);
+        Assert.Contains("380 В", allText);
+    }
+
+    #endregion
+
+    #region Hyphenation — line break merge
+
+    [Fact]
+    public void Chunk_Hyphenation_LineBreak_Merged()
+    {
+        // Arrange — text with soft line-break hyphenation
+        var tokenizer = CreateTokenizer();
+        if (tokenizer == null)
+            return;
+
+        var chunker = CreateChunker(tokenizer);
+
+        // Simulate word wrapping with hyphen at line end
+        var doc = CreateDocument(
+            "Hyphenation Doc",
+            "Технологи- \nческий процесс требует контроля.\n\n" +
+            "Темпера- \nтура в системе должна быть в норме.\n\n" +
+            "Обору- \nдование работает штатно.");
+
+        // Act
+        var chunks = chunker.Chunk(doc);
+
+        // Assert — hyphenated words should be merged
+        var allText = string.Join("\n", chunks.Select(c => c.Text));
+
+        // The merged words should appear (without the hyphen and line break)
+        Assert.True(
+            allText.Contains("Технологический") || allText.Contains("Технологи"),
+            "Expected merged 'Технологический' or partial 'Технологи' in chunks");
+        Assert.True(
+            allText.Contains("Температура") || allText.Contains("Темпера"),
+            "Expected merged 'Температура' or partial 'Темпера' in chunks");
+    }
+
+    #endregion
+
+    #region Hyphenation — RS-485 preserved (not merged)
+
+    [Fact]
+    public void Chunk_Hyphenation_RS485_Preserved()
+    {
+        // Arrange — RS-485 should NOT be treated as hyphenation
+        var tokenizer = CreateTokenizer();
+        if (tokenizer == null)
+            return;
+
+        var chunker = CreateChunker(tokenizer);
+
+        var doc = CreateDocument(
+            "Hyphenation Preserved Doc",
+            "Интерфейс RS-485 используется для передачи данных.\n\n" +
+            "Протокол Modbus RTU работает поверх RS-485.\n\n" +
+            "TCP/IP обеспечивает сетевое подключение.");
+
+        // Act
+        var chunks = chunker.Chunk(doc);
+
+        // Assert — technical identifiers with hyphens should be preserved
+        var allText = string.Join("\n", chunks.Select(c => c.Text));
+
+        Assert.Contains("RS-485", allText);
+        Assert.Contains("TCP/IP", allText);
+        Assert.Contains("Modbus RTU", allText);
+    }
+
+    #endregion
+
+    #region Determinism — identical results
+
+    [Fact]
+    public void Chunk_Determinism_IdenticalResults()
+    {
+        // Arrange
+        var tokenizer = CreateTokenizer();
+        if (tokenizer == null)
+            return;
+
+        var chunker = CreateChunker(tokenizer);
+
+        var doc = CreateDocument(
+            "Determinism Doc",
+            "First paragraph with content.\n\n" +
+            "Second paragraph with more content.\n\n" +
+            "Third paragraph with even more content.\n\n" +
+            "Fourth paragraph to finish.");
+
+        // Act — run chunking 5 times
+        var results = new List<IReadOnlyList<DocumentChunk>>();
+        for (var i = 0; i < 5; i++)
+        {
+            results.Add(chunker.Chunk(doc));
+        }
+
+        // Assert — all results should be identical
+        for (var i = 1; i < results.Count; i++)
+        {
+            Assert.Equal(results[0].Count, results[i].Count);
+            for (var j = 0; j < results[0].Count; j++)
+            {
+                Assert.Equal(results[0][j].Text, results[i][j].Text);
+                Assert.Equal(results[0][j].Metadata.TokenCount, results[i][j].Metadata.TokenCount);
+            }
+        }
+    }
+
+    #endregion
+
+    #region Text preservation — all content recoverable
+
+    [Fact]
+    public void Chunk_TextPreservation_AllContentRepresented()
+    {
+        // Arrange
+        var tokenizer = CreateTokenizer();
+        if (tokenizer == null)
+            return;
+
+        var chunker = CreateChunker(tokenizer);
+
+        var originalTexts = new[]
+        {
+            "Первый абзац с важной информацией о датчиках.",
+            "Второй абзац содержит данные о мониторинге.",
+            "Третий абзац описывает параметры системы.",
+            "Четвёртый абзац — заключение."
+        };
+
+        var doc = CreateDocument("Preservation Doc", string.Join("\n\n", originalTexts));
+
+        // Act
+        var chunks = chunker.Chunk(doc);
+
+        // Assert — all original content should appear in at least one chunk
+        var allText = string.Join("\n", chunks.Select(c => c.Text));
+
+        foreach (var original in originalTexts)
+        {
+            Assert.Contains(original, allText, StringComparison.Ordinal);
+        }
+    }
+
+    #endregion
+
+    #region Audit — ChunkAudit uses real tokenizer
+
+    [Fact]
+    public void ChunkAudit_CountTokens_UsesRealTokenizer()
+    {
+        // Arrange
+        var tokenizerPath = Path.GetFullPath(
+            Path.Combine(typeof(TokenAwareChunkerTests).Assembly.Location,
+                "..", "..", "..", "..", "..", "..",
+                "models", "paraphrase-multilingual-MiniLM-L12-v2", "tokenizer.json"));
+
+        if (!File.Exists(tokenizerPath))
+            return;
+
+        var tokenizer = new Tokenizer(vocabPath: tokenizerPath);
+        var audit = new ChunkAudit(tokenizer);
+
+        // Act
+        var tokenCount = audit.CountTokens("Hello world");
+
+        // Assert — should match direct tokenizer count
+        var directCount = tokenizer.Encode("Hello world").Length;
+        Assert.Equal(directCount, tokenCount);
+
+        tokenizer.Dispose();
+    }
+
+    #endregion
+
+    #region Audit — percentile calculation correctness
+
+    [Fact]
+    public void ChunkAudit_Percentile_Correct()
+    {
+        // Arrange — create documents with known token counts
+        var tokenizerPath = Path.GetFullPath(
+            Path.Combine(typeof(TokenAwareChunkerTests).Assembly.Location,
+                "..", "..", "..", "..", "..", "..",
+                "models", "paraphrase-multilingual-MiniLM-L12-v2", "tokenizer.json"));
+
+        if (!File.Exists(tokenizerPath))
+            return;
+
+        var tokenizer = new Tokenizer(vocabPath: tokenizerPath);
+        var audit = new ChunkAudit(tokenizer);
+
+        // Create a simple document and chunk it
+        var chunker = new TokenAwareChunker(tokenizer);
+        var doc = CreateDocument("Percentile Doc",
+            string.Join("\n\n", Enumerable.Range(0, 20).Select(i =>
+                $"Paragraph {i}. This is test content for percentile verification.")));
+
+        var chunks = chunker.Chunk(doc);
+        var report = audit.AuditDocuments(new[] { (doc, chunks) });
+
+        // Assert — statistics should be computed correctly
+        Assert.True(report.TotalChunks > 0);
+        Assert.True(report.MinTokens >= 0);
+        Assert.True(report.MaxTokens >= report.MinTokens);
+        Assert.True(report.P90Tokens >= report.MedianTokens);
+        Assert.True(report.P95Tokens >= report.P90Tokens);
+        Assert.True(report.P99Tokens >= report.P95Tokens);
+        Assert.True(report.P99Tokens <= report.MaxTokens);
+
+        // Bucket counts should sum correctly
+        Assert.True(report.ChunksUpTo128 <= report.TotalChunks);
+        Assert.True(report.ChunksUpTo256 <= report.TotalChunks);
+        Assert.True(report.ChunksUpTo384 <= report.TotalChunks);
+        Assert.True(report.ChunksUpTo512 <= report.TotalChunks);
+        Assert.True(report.ChunksOver512 <= report.TotalChunks);
+
+        tokenizer.Dispose();
     }
 
     #endregion

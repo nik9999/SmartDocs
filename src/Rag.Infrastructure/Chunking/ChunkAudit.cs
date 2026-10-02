@@ -58,20 +58,14 @@ public sealed class ChunkAudit
 
     /// <summary>
     /// Counts tokens in text using the real tokenizer.
+    /// No fallback — throws on tokenizer failure.
     /// </summary>
     public int CountTokens(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return 0;
 
-        try
-        {
-            return _tokenizer.Encode(text).Length;
-        }
-        catch
-        {
-            return (int)(text.Length / 4.0);
-        }
+        return _tokenizer.Encode(text).Length;
     }
 
     /// <summary>
@@ -146,16 +140,39 @@ public sealed class AuditReport
         MinTokens = tokenCounts[0];
         MaxTokens = tokenCounts[^1];
         AverageTokens = tokenCounts.Average();
-        MedianTokens = tokenCounts[tokenCounts.Count / 2];
-        P90Tokens = tokenCounts[(int)(tokenCounts.Count * 0.9)];
-        P95Tokens = tokenCounts[(int)(tokenCounts.Count * 0.95)];
-        P99Tokens = tokenCounts[(int)(tokenCounts.Count * 0.99)];
+        MedianTokens = ComputePercentile(tokenCounts, 0.5);
+        P90Tokens = ComputePercentile(tokenCounts, 0.9);
+        P95Tokens = ComputePercentile(tokenCounts, 0.95);
+        P99Tokens = ComputePercentile(tokenCounts, 0.99);
 
         ChunksUpTo128 = tokenCounts.Count(t => t <= 128);
         ChunksUpTo256 = tokenCounts.Count(t => t <= 256);
         ChunksUpTo384 = tokenCounts.Count(t => t <= 384);
         ChunksUpTo512 = tokenCounts.Count(t => t <= 512);
         ChunksOver512 = tokenCounts.Count(t => t > 512);
+    }
+
+    /// <summary>
+    /// Computes percentile using linear interpolation method.
+    /// This is the standard "Method 7" (R-7) used by R and many statistical packages.
+    /// Deterministic and correct for any sample size.
+    /// </summary>
+    private static int ComputePercentile(IReadOnlyList<int> sortedValues, double percentile)
+    {
+        var n = sortedValues.Count;
+        if (n == 0)
+            return 0;
+        if (n == 1)
+            return sortedValues[0];
+
+        // Linear interpolation (R-7 method)
+        // rank = percentile * (n - 1)  (0-based)
+        var rank = percentile * (n - 1);
+        var lower = (int)Math.Floor(rank);
+        var upper = Math.Min(lower + 1, n - 1);
+        var fraction = rank - lower;
+
+        return (int)Math.Round(sortedValues[lower] + fraction * (sortedValues[upper] - sortedValues[lower]));
     }
 
     /// <summary>

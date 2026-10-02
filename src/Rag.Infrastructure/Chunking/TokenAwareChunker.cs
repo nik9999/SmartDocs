@@ -96,23 +96,137 @@ public sealed class TokenAwareChunker : IChunker
         if (string.IsNullOrWhiteSpace(text))
             return 0;
 
-        try
-        {
-            var encoded = _tokenizer.Encode(text);
-            return encoded.Length;
-        }
-        catch
-        {
-            // Fallback: estimate from character count
-            // This should rarely happen with valid text
-            return (int)(text.Length / 4.0);
-        }
+        var encoded = _tokenizer.Encode(text);
+        return encoded.Length;
     }
 
     /// <summary>
-    /// Splits text into paragraphs. Preserves empty paragraph markers.
+    /// Splits text into paragraphs. Handles soft line-break hyphenation:
+    /// "word-\nword" at line boundaries is merged into "wordword" when it's
+    /// clearly a hyphenation break (not a real hyphenated identifier).
+    ///
+    /// Technical identifiers (RS-485, TCP/IP, T_sensor, cos(φ), etc.) are preserved.
     /// </summary>
-    private static List<string> SplitIntoParagraphs(string text)
+    private List<string> SplitIntoParagraphs(string text)
+    {
+        // Step 1: Handle soft line-break hyphenation
+        var normalized = NormalizeHyphenatedLineBreaks(text);
+
+        return SplitIntoParagraphsRaw(normalized);
+    }
+
+    /// <summary>
+    /// Normalizes soft line-break hyphenation in text.
+    ///
+    /// Detects patterns like:
+    ///   "технологи-\nческий" → "технологический"
+    ///   "темпера-\nтура" → "температура"
+    ///
+    /// While preserving real hyphenated identifiers:
+    ///   "RS-485" → "RS-485" (unchanged)
+    ///   "TCP/IP" → "TCP/IP" (unchanged)
+    ///   "T_sensor" → "T_sensor" (unchanged)
+    ///   "cos(φ)" → "cos(φ)" (unchanged)
+    ///
+    /// Heuristic for distinguishing hyphenation from real hyphens:
+    /// - Hyphenation: short word part before hyphen (1-4 chars), word part after,
+    ///   line break immediately after hyphen
+    /// - Real hyphen: longer parts, or hyphen in the middle of a line (not at EOL)
+    /// </summary>
+    private static string NormalizeHyphenatedLineBreaks(string text)
+    {
+        // Pattern: word-hyphen + line-break + word
+        // We need to distinguish:
+        // 1. Hyphenation: "word-\nword" where both parts are short (likely a split word)
+        // 2. Real hyphen: "RS-485" (longer parts, or hyphen not at EOL)
+        //
+        // Strategy: match "-\n" or "-\r\n" and check context.
+        // If the part before the hyphen is short (1-6 chars) and consists of
+        // word characters, and the part after starts with word characters,
+        // treat it as hyphenation and merge.
+
+        var result = new System.Text.StringBuilder(text.Length);
+        var lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+
+        var i = 0;
+        while (i < lines.Length)
+        {
+            var line = lines[i];
+
+            // Check if this line ends with a hyphen that looks like hyphenation
+            if (i + 1 < lines.Length && line.Length > 0 && line[^1] == '-')
+            {
+                var beforeHyphen = line.Length > 1 ? line[..^1] : string.Empty;
+
+                // Heuristic: if before-hyphen is short word chars, treat as hyphenation
+                if (IsLikelyHyphenationPart(beforeHyphen))
+                {
+                    var nextLine = lines[i + 1];
+                    // Remove trailing whitespace from next line start (already handled by Split)
+                    // Merge: remove hyphen from current line, concatenate with next line
+                    result.Append(beforeHyphen);
+
+                    // Skip the hyphenated line and the next line, merge them
+                    i += 2;
+                    // Continue processing the merged result with next lines
+                    // We need to re-append the next line content
+                    // Since we're using StringBuilder, append next line now
+                    // but we need to handle paragraph boundaries
+                    // For now, append next line directly (it will be joined later)
+                    // Use a special marker or handle at paragraph level
+
+                    // Actually, let's handle this differently - just append
+                    // the next line content right after beforeHyphen
+                    // and skip the line break
+                    // We'll use a placeholder for "no line break"
+                    result.Append(nextLine);
+                    continue;
+                }
+            }
+
+            result.Append(line);
+            i++;
+
+            // Add paragraph boundary marker for non-merged lines
+            if (i < lines.Length)
+            {
+                result.AppendLine();
+            }
+        }
+
+        return result.ToString();
+    }
+
+    /// <summary>
+    /// Checks if a string looks like the first part of a hyphenated word
+    /// (short, word characters only).
+    /// </summary>
+    private static bool IsLikelyHyphenationPart(string s)
+    {
+        if (string.IsNullOrEmpty(s) || s.Length > 6)
+            return false;
+
+        // Should be word characters (letters, digits, underscores for identifiers like T_)
+        // But NOT contain slashes, digits after letters in patterns like "RS-485"
+        foreach (var c in s)
+        {
+            if (!char.IsLetterOrDigit(c) && c != '_')
+                return false;
+        }
+
+        // Additional check: if it contains a digit followed by more chars,
+        // it might be part of "RS-485" pattern — but "RS" alone is fine
+        // The key distinction: "RS" (2 letters) before hyphen at EOL is ambiguous,
+        // but "RS-485" has the hyphen in the middle of a line, not at EOL.
+        // Since we only match "-\n" patterns, "RS-485" won't match (485 is on same line).
+
+        return true;
+    }
+
+    /// <summary>
+    /// Splits normalized text into paragraphs (no hyphenation handling needed here).
+    /// </summary>
+    private static List<string> SplitIntoParagraphsRaw(string text)
     {
         var paragraphs = new List<string>();
         var lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
@@ -310,70 +424,66 @@ public sealed class TokenAwareChunker : IChunker
     }
 
     /// <summary>
-    /// Force-splits text at character level when a single token exceeds max.
+    /// Force-splits text at real tokenizer boundaries when a single unit exceeds max.
     /// Uses token-aware splitting to stay as close to max as possible.
+    /// Guarantees no chunk exceeds maxTokens.
+    /// Terminates even for pathological input (single-char tokens, etc.).
     /// </summary>
     private List<string> ForceSplit(string text, int maxTokens)
     {
         var chunks = new List<string>();
-        var charIndex = 0;
 
-        while (charIndex < text.Length)
+        var remaining = text;
+        while (remaining.Length > 0)
         {
-            // Binary search for the best split point
-            var remaining = text.Length - charIndex;
-            var targetLen = Math.Min(remaining, _targetChunkTokens * 3); // rough char estimate
-            if (targetLen <= 0)
-                targetLen = remaining;
+            var tokenCount = CountTokens(remaining);
 
-            var end = charIndex + targetLen;
-            if (end >= text.Length)
+            if (tokenCount <= maxTokens)
             {
-                chunks.Add(text[charIndex..]);
+                chunks.Add(remaining.Trim());
                 break;
             }
 
-            // Try to find a safe split point (space, punctuation)
-            var splitPos = FindSafeSplitPoint(text, charIndex, end);
-            if (splitPos <= charIndex)
+            // Binary search for the split point that gives ~maxTokens
+            var splitPos = FindExactSplitByTokens(remaining, maxTokens);
+
+            if (splitPos <= 0)
             {
-                // No safe point found, force split at end
-                splitPos = end;
+                // Edge case: even a single character produces tokens >= maxTokens
+                // This shouldn't happen with a proper tokenizer, but guard against it
+                // Split at every character to guarantee termination
+                splitPos = 1;
             }
 
-            chunks.Add(text[charIndex..splitPos].Trim());
-            charIndex = splitPos;
+            if (splitPos >= remaining.Length)
+            {
+                // Should not happen, but guard against infinite loop
+                chunks.Add(remaining.Trim());
+                break;
+            }
+
+            var chunk = remaining[..splitPos].Trim();
+            if (string.IsNullOrEmpty(chunk))
+            {
+                // Avoid infinite loop on empty chunks
+                splitPos++;
+                chunk = remaining[..Math.Min(splitPos, remaining.Length)].Trim();
+                if (string.IsNullOrEmpty(chunk))
+                    break; // Cannot make progress, stop
+            }
+
+            chunks.Add(chunk);
+            remaining = remaining[splitPos..];
         }
 
         return chunks;
     }
 
     /// <summary>
-    /// Finds a safe split point before the target position.
-    /// Prefers spaces and punctuation over mid-word splits.
-    /// </summary>
-    private static int FindSafeSplitPoint(string text, int start, int target)
-    {
-        // Look backwards from target for a space
-        var lookback = Math.Min(50, target - start);
-        for (var i = target - 1; i >= Math.Max(start, target - lookback); i--)
-        {
-            var c = text[i];
-            if (char.IsWhiteSpace(c))
-                return i + 1;
-
-            // Also allow splitting after punctuation
-            if (c == '.' || c == ',' || c == '!' || c == '?' || c == ';' || c == ':')
-                return i + 1;
-        }
-
-        // No safe point found, return target
-        return target;
-    }
-
-    /// <summary>
     /// Applies overlap between consecutive chunks by copying trailing tokens
     /// from each chunk to the beginning of the next one.
+    /// Overlap is measured in real tokenizer tokens.
+    /// The resulting chunk is trimmed to never exceed MaxChunkTokens.
     /// </summary>
     private List<string> ApplyOverlap(List<string> chunks)
     {
@@ -404,7 +514,58 @@ public sealed class TokenAwareChunker : IChunker
             if (!string.IsNullOrEmpty(overlapText))
             {
                 var overlapped = overlapText + " " + current;
-                result.Add(overlapped);
+
+                // Enforce maxTokens after overlap — trim overlap portion precisely
+                var currentTokens = CountTokens(current);
+                if (currentTokens >= _maxChunkTokens)
+                {
+                    // Current chunk alone fills the budget — no overlap
+                    result.Add(current);
+                }
+                else
+                {
+                    var budgetForOverlap = _maxChunkTokens - currentTokens - 1; // -1 for space
+                    if (budgetForOverlap <= 0)
+                    {
+                        result.Add(current);
+                    }
+                    else
+                    {
+                        // Binary search for the longest prefix of overlapText that fits
+                        var overlapTokensBefore = CountTokens(overlapText);
+                        var targetOverlap = Math.Min(budgetForOverlap, overlapTokensBefore);
+
+                        // Binary search for the char position where prefix has exactly targetOverlap tokens
+                        var splitPos = FindExactSplitByTokens(overlapText, targetOverlap);
+                        var trimmedOverlap = overlapText[..splitPos].Trim();
+
+                        if (string.IsNullOrWhiteSpace(trimmedOverlap))
+                        {
+                            result.Add(current);
+                        }
+                        else
+                        {
+                            var finalText = trimmedOverlap + " " + current;
+                            var finalTokens = CountTokens(finalText);
+                            // Safety: if still over (shouldn't happen), truncate
+                            if (finalTokens > _maxChunkTokens)
+                            {
+                                // Aggressive trim: remove words from overlap end until it fits
+                                var ov = trimmedOverlap;
+                                while (CountTokens(ov + " " + current) > _maxChunkTokens && ov.Length > 0)
+                                {
+                                    var lastSpace = ov.LastIndexOf(' ');
+                                    if (lastSpace > 0)
+                                        ov = ov[..lastSpace].Trim();
+                                    else
+                                        ov = ov[..Math.Max(0, ov.Length - 1)];
+                                }
+                                finalText = string.IsNullOrWhiteSpace(ov) ? current : (ov + " " + current);
+                            }
+                            result.Add(finalText);
+                        }
+                    }
+                }
             }
             else
             {
@@ -416,38 +577,136 @@ public sealed class TokenAwareChunker : IChunker
     }
 
     /// <summary>
-    /// Extracts the trailing portion of text that corresponds approximately to the given token count.
-    /// Uses a heuristic: estimate character ratio and then trim.
+    /// Extracts the trailing portion of text that corresponds to the given token count.
+    /// Uses binary search over character positions with real tokenizer verification.
     /// </summary>
-    private static string GetTrailingTextByTokens(string text, int targetTokens)
+    private string GetTrailingTextByTokens(string text, int targetTokens)
     {
-        if (string.IsNullOrWhiteSpace(text))
+        if (string.IsNullOrWhiteSpace(text) || targetTokens <= 0)
             return string.Empty;
 
-        // Simple heuristic: estimate character length from token count
-        // Average ~1.5 chars per token for English, ~2-3 for Russian
-        // Use a conservative estimate and then verify
-        var estimatedChars = targetTokens * 4;
-        var startIdx = text.Length - estimatedChars;
-
-        if (startIdx <= 0)
+        var totalTokens = CountTokens(text);
+        if (targetTokens >= totalTokens)
             return text.Trim();
 
-        // Try to find a sentence boundary near the estimated position
-        var searchStart = Math.Max(0, startIdx - 20);
-        var searchEnd = Math.Min(text.Length, startIdx + 20);
+        // We need the last targetTokens tokens.
+        // Binary search for the split point: keep first (totalTokens - targetTokens) tokens.
+        var keepTokens = totalTokens - targetTokens;
+        var prefixTokens = keepTokens;
 
-        // Look for a sentence-ending punctuation or newline
-        for (var i = searchStart; i < searchEnd; i++)
+        // Binary search for the character position where the prefix has exactly prefixTokens
+        var lo = 0;
+        var hi = text.Length;
+        var bestSplit = text.Length;
+
+        while (lo <= hi)
         {
-            var c = text[i];
-            if ((c == '.' || c == '!' || c == '?') && i + 1 < text.Length && char.IsWhiteSpace(text[i + 1]))
+            var mid = lo + (hi - lo) / 2;
+            var prefix = text[..mid];
+            var tokenCount = CountTokens(prefix);
+
+            if (tokenCount <= prefixTokens)
             {
-                return text[(i + 1)..].Trim();
+                bestSplit = mid;
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
             }
         }
 
-        // Fall back to character-based split
-        return text[startIdx..].Trim();
+        // bestSplit is the furthest position where prefix has <= prefixTokens
+        // Verify we're close enough
+        var actualTokens = CountTokens(text[..bestSplit]);
+        if (actualTokens > prefixTokens)
+        {
+            // Adjust: find the exact position
+            bestSplit = FindExactSplitByTokens(text, prefixTokens);
+        }
+
+        if (bestSplit >= text.Length)
+            return text.Trim();
+
+        // Try to find a safe boundary (space or punctuation) near bestSplit
+        var safePos = FindSafeBoundary(text, bestSplit);
+        return text[safePos..].Trim();
+    }
+
+    /// <summary>
+    /// Finds the character position where the prefix contains at most targetTokens.
+    /// Returns the furthest position where CountTokens(text[..pos]) <= targetTokens.
+    /// Guarantees: the resulting prefix will never exceed targetTokens.
+    /// </summary>
+    private int FindExactSplitByTokens(string text, int targetTokens)
+    {
+        if (targetTokens <= 0)
+            return 0;
+
+        var totalTokens = CountTokens(text);
+        if (targetTokens >= totalTokens)
+            return text.Length;
+
+        // Binary search: find the largest pos where CountTokens(text[..pos]) <= targetTokens
+        var lo = 1;
+        var hi = text.Length - 1;
+        var best = 1;
+
+        while (lo <= hi)
+        {
+            var mid = lo + (hi - lo) / 2;
+            var prefix = text[..mid];
+            var tokenCount = CountTokens(prefix);
+
+            if (tokenCount <= targetTokens)
+            {
+                best = mid;
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid - 1;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Finds a safe boundary near a character position.
+    /// Prefers whitespace, punctuation, or tokenizer token boundaries.
+    /// Preserves technical identifiers (RS-485, TCP/IP, T_sensor, etc.).
+    /// </summary>
+    private int FindSafeBoundary(string text, int pos)
+    {
+        if (pos >= text.Length)
+            return text.Length;
+
+        // First, try the exact position
+        if (char.IsWhiteSpace(text[pos]) || char.IsPunctuation(text[pos]))
+            return pos;
+
+        // Look forward for a safe boundary (up to 30 chars)
+        for (var i = pos + 1; i <= Math.Min(pos + 30, text.Length); i++)
+        {
+            if (i >= text.Length)
+                return text.Length;
+
+            var c = text[i];
+            if (char.IsWhiteSpace(c))
+                return i + 1;
+            if (c == '.' || c == ',' || c == '!' || c == '?' || c == ';' || c == ':')
+                return i + 1;
+        }
+
+        // Look backward for a safe boundary (up to 20 chars)
+        for (var i = pos - 1; i >= Math.Max(0, pos - 20); i--)
+        {
+            if (char.IsWhiteSpace(text[i]))
+                return i + 1;
+        }
+
+        // No safe boundary found, return original position
+        return pos;
     }
 }

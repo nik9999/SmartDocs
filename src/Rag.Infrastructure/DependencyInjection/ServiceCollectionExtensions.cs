@@ -3,11 +3,13 @@ using Microsoft.Extensions.DependencyInjection;
 using Rag.Application.Documents;
 using Rag.Core.Contracts;
 using Rag.Core.Embeddings;
+using Rag.Infrastructure.Chunking;
 using Rag.Infrastructure.Configuration;
 using Rag.Infrastructure.Embeddings;
 using Rag.Infrastructure.Persistence;
 using Rag.Infrastructure.Persistence.Repositories;
 using Rag.Infrastructure.Search;
+using Tokenizers.DotNet;
 
 
 namespace Rag.Infrastructure.DependencyInjection;
@@ -58,6 +60,41 @@ public static class ServiceCollectionExtensions
         // Hybrid retrieval components
         services.AddScoped<IResultFusion, ReciprocalRankFusion>();
         services.AddScoped<IReranker, BaselineReranker>();
+
+        // Chunking — TokenAwareChunker uses the same tokenizer as the embedding pipeline
+        var tokenizerModelPath = embeddingSection["TokenizerPath"]
+            ?? Path.Combine(Path.GetDirectoryName(embeddingSection["ModelPath"]) ?? "models", "paraphrase-multilingual-MiniLM-L12-v2");
+
+        services.AddScoped<IChunker, TokenAwareChunker>(sp =>
+        {
+            var tokenizerJsonPath = Path.Combine(tokenizerModelPath, "tokenizer.json");
+            Tokenizer? tokenizer = null;
+            if (File.Exists(tokenizerJsonPath))
+            {
+                tokenizer = new Tokenizer(vocabPath: tokenizerJsonPath);
+            }
+
+            if (tokenizer == null)
+            {
+                // Fallback: create a minimal tokenizer if tokenizer.json not found
+                // This handles the case where only vocab.txt exists
+                var vocabTxtPath = Path.Combine(tokenizerModelPath, "vocab.txt");
+                if (File.Exists(vocabTxtPath))
+                {
+                    tokenizer = new Tokenizer(vocabPath: vocabTxtPath);
+                }
+            }
+
+            if (tokenizer == null)
+            {
+                throw new InvalidOperationException(
+                    $"Tokenizer not found. Searched in '{tokenizerModelPath}'. " +
+                    "Required: tokenizer.json or vocab.txt. " +
+                    "Configure Rag:Embeddings:TokenizerPath if the tokenizer is in a different location.");
+            }
+
+            return new TokenAwareChunker(tokenizer, targetChunkTokens: 256, maxChunkTokens: 384, overlapTokens: 48);
+        });
 
         return services;
     }
