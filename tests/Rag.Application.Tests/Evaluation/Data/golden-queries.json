@@ -87,5 +87,213 @@
   {
     "query": "несуществующий термин абракадабра",
     "expectedDocumentIds": []
+  },
+  {
+    "query": "измеренная температура",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "температура измерения",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "значение температуры",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "температура датчика",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567891",
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "напряжение канала",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "коэффициент мощности",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "measured value channel",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
+    ]
+  },
+  {
+    "query": "sensor temperature",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567891",
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "power factor",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "signal frequency",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "measured temperature",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "temperature measurement",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "значение Channel B",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "Power Factor для Канала 2",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "Modbus параметры канала",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
+    ]
+  },
+  {
+    "query": "RS-485",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
+    ]
+  },
+  {
+    "query": "Modbus RTU",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
+    ]
+  },
+  {
+    "query": "TCP/IP",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "Channel A",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "Channel B",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "220 В",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "380 В",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "50 Гц",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "формула мощности",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "расчет P через U I и cos phi",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "power calculation formula",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "cos phi значение",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
+  },
+  {
+    "query": "блокчейн распределенный реестр",
+    "expectedDocumentIds": []
+  },
+  {
+    "query": "нейросеть машинное обучение облачные вычисления",
+    "expectedDocumentIds": []
+  },
+  {
+    "query": "REST API микросервисы Kubernetes",
+    "expectedDocumentIds": []
+  },
+  {
+    "query": "напряжение 220 В мониторинг",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "давление температура защита",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+    ]
+  },
+  {
+    "query": "ток утечки короткое замыкание",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567895"
+    ]
+  },
+  {
+    "query": "канал 1 данные",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567891",
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567892",
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567893"
+    ]
+  },
+  {
+    "query": "φ ΔT U₁ U₂",
+    "expectedDocumentIds": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567894"
+    ]
   }
 ]
