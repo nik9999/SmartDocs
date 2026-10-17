@@ -176,25 +176,55 @@ foreach (var parsed in parsedDocuments)
         }
     }
 
-    // B. Preprocessing + Contextual Chunker + TokenAware Chunker + Recursive Character Chunker
-    var baseChunker = new RecursiveCharacterChunker(maxChunkSize: 1200, separators: ["\n## ", "\n# ", "\n\n", ". "]);
-    var tokenChunker = new TokenAwareChunker(baseChunker, tokenCounter, maxTokens: 450);
-    var contextualChunker = new ContextualChunker(tokenChunker, chatClient);
+    // B. Token Budgeting Strategy:
+    //    1. FinalTargetCeiling (450 tokens): Жесткий лимит для эмбеддинг-модели BGE-M3.
+    //    2. ContextBudget (80 tokens): Резерв под ситуационный контекст LLM (Anthropic Contextual Retrieval).
+    //    3. MultimodalBudget (70 tokens): Резерв под описания изображений (Vision LLM) и таблицы Markdown.
+    //    4. BaseTextBudget (300 tokens): Допустимый бюджет исходного текста (450 - 80 - 70).
+    var budgets = new ChunkingTokenBudgets(
+        finalTargetCeiling: 450,
+        contextBudget: 80,
+        multimodalBudget: 70);
+
+    Console.WriteLine($"  [Бюджет токенов] Исходный текст: {budgets.BaseTextBudget} | Контекст LLM: +{budgets.ContextBudget} | Мультимодальный: +{budgets.MultimodalBudget} | Жесткий лимит: <= {budgets.FinalTargetCeiling}");
+
+    // C. Первичное разбиение с учетом бюджета исходного текста (BaseTextBudget = 300)
+    var baseChunker = new RecursiveCharacterChunker(maxChunkSize: 900, separators: ["\n## ", "\n# ", "\n\n", ". "]);
+    var baseTokenChunker = new TokenAwareChunker(baseChunker, tokenCounter, maxTokens: budgets.BaseTextBudget);
+    var contextualChunker = new ContextualChunker(baseTokenChunker, chatClient);
     var preprocessedChunker = new PreprocessingChunker(contextualChunker);
 
-    // C. Multimodal Chunker (inlines figure captions into text chunks)
-    var mmChunker = new MultimodalChunker(preprocessedChunker, captionedImages, Array.Empty<ExtractedTable>());
+    // D. Мультимодальное обогащение (инлайнинг подписей к изображениям и таблиц)
+    //    с гарантией непревышения итогового лимита (FinalTargetCeiling = 450)
+    var mmChunker = new MultimodalChunker(
+        preprocessedChunker,
+        captionedImages,
+        Array.Empty<ExtractedTable>(),
+        tokenCounter,
+        maxTokens: budgets.FinalTargetCeiling);
 
-    int docChunkCount = 0;
+    // E. Пост-валидация и повторное разбиение чанков при превышении итогового лимита
+    var postEnrichmentSafety = new TokenAwareChunker(tokenCounter, maxTokens: budgets.FinalTargetCeiling);
+
+    var rawEnrichedChunks = new List<DocumentChunk>();
     await foreach (var mmChunk in mmChunker.ChunkAsync(doc).ConfigureAwait(false))
     {
-        allEnrichedChunks.Add(mmChunk.Chunk);
-        docChunkCount++;
-
-        Console.WriteLine($"    === Chunk #{mmChunk.Chunk.ChunkIndex} ({mmChunk.Chunk.Text.Length} chars) ===\n{mmChunk.Chunk.Text}\n    ================================================");
+        rawEnrichedChunks.Add(mmChunk.Chunk);
     }
 
-    Console.WriteLine($"  Produced {docChunkCount} enriched chunk(s) (with Markdown tables and situational context).");
+    var finalizedDocChunks = postEnrichmentSafety.EnforceBudget(rawEnrichedChunks).ToList();
+
+    foreach (var chunk in finalizedDocChunks)
+    {
+        allEnrichedChunks.Add(chunk);
+        int finalTokens = tokenCounter.CountTokens(chunk.Text);
+
+        Console.WriteLine($"    === Chunk #{chunk.ChunkIndex} ({finalTokens} tokens / {chunk.Text.Length} chars, <= {budgets.FinalTargetCeiling} tokens) ===");
+        Console.WriteLine(chunk.Text);
+        Console.WriteLine("    ================================================");
+    }
+
+    Console.WriteLine($"  Produced {finalizedDocChunks.Count} enriched chunk(s) (все строго проверены <= {budgets.FinalTargetCeiling} токенов).");
 }
 
 // 6. Generate 1024-dim Dense Embeddings for all Chunks

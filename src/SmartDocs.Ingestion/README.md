@@ -17,8 +17,10 @@
 * **`SentenceChunker`**: Чанкинг по границам предложений с поддержкой многоязычного Unicode (`\p{Lu}`).
 * **`SemanticChunker`**: Семантическое разбиение на базе локальной ONNX модели BGE-M3 (вычисление косинусного сходства векторов предложений и разбиение в точках смены темы).
 * **`CodeFileChunker`**: Синтаксический анализ исходного кода C# на базе Roslyn с сохранением объявлений `using`, пространств имен и контекста классов.
+* **`TokenAwareChunker`**: Управление бюджетом токенов под целевую модель (TikToken / `ITokenCounter`). Поддерживает режим декоратора `IChunker`, автономный режим (`SplitIfNeeded`, `EnforceBudget`, `EnforceBudgetAsync`) и гарантирует, что ни один чанк не превысит заданный лимит токенов.
+* **`ChunkingTokenBudgets`**: Двухуровневое бюджетирование токенов (`BaseTextBudget`, `ContextBudget`, `MultimodalBudget`, `FinalTargetCeiling`), исключающее переполнение контекста эмбеддингов после обогащения.
 * **`ContextualChunker`**: Реализация Anthropic Contextual Retrieval — добавление сжатого контекста всего документа к каждому чанку через LLM.
-* **`MultimodalChunker`**: Связывание текстовых чанков с описаниями извлеченных изображений (`ImageCaptioner`) и таблицами (`ExtractedTable`).
+* **`MultimodalChunker`**: Связывание текстовых чанков с описаниями извлеченных изображений (`ImageCaptioner`) и таблицами (`ExtractedTable`) с поддержкой интерфейса `IChunker` и встроенным контролем предельного размера токенов.
 * **`FixedSizeChunker`**: Базовый чанкинг фиксированного размера с перекрытием (overlap).
 
 ### 3. Парсеры форматов (`SmartDocs.Ingestion.Parsers`)

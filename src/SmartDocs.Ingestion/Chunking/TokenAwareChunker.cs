@@ -26,11 +26,14 @@ namespace SmartDocs.Ingestion.Chunking;
 /// </remarks>
 public sealed class TokenAwareChunker : IChunker
 {
-    private readonly IChunker _inner;
+    private readonly IChunker? _inner;
     private readonly ITokenCounter _tokenCounter;
 
     /// <summary>The maximum number of tokens any emitted chunk may contain.</summary>
     public int MaxTokens { get; }
+
+    /// <summary>The token counter used to measure chunk budgets.</summary>
+    public ITokenCounter TokenCounter => _tokenCounter;
 
     /// <summary>Create a token-budget decorator around <paramref name="inner"/>.</summary>
     /// <param name="inner">The chunker whose output is re-checked against the token budget.</param>
@@ -46,13 +49,35 @@ public sealed class TokenAwareChunker : IChunker
         MaxTokens = maxTokens;
     }
 
-    public string Strategy => $"token-aware({_inner.Strategy})";
+    /// <summary>
+    /// Create a standalone token budget enforcer without an inner chunker.
+    /// Used for post-enrichment verification, re-splitting, and safety passes.
+    /// </summary>
+    /// <param name="tokenCounter">Counts tokens under the target model's encoding.</param>
+    /// <param name="maxTokens">The per-chunk token ceiling (for example 450 or 512).</param>
+    public TokenAwareChunker(ITokenCounter tokenCounter, int maxTokens = 512)
+    {
+        ArgumentNullException.ThrowIfNull(tokenCounter);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTokens);
+        _inner = null;
+        _tokenCounter = tokenCounter;
+        MaxTokens = maxTokens;
+    }
+
+    public string Strategy => _inner != null ? $"token-aware({_inner.Strategy})" : "token-aware";
 
     public async IAsyncEnumerable<DocumentChunk> ChunkAsync(
         Document document,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(document);
+
+        if (_inner == null)
+        {
+            throw new InvalidOperationException(
+                "Cannot call ChunkAsync(Document) on a standalone TokenAwareChunker without an inner IChunker. " +
+                "Use SplitIfNeeded or EnforceBudget to process chunks, or provide an inner IChunker.");
+        }
 
         int emittedIndex = 0;
         await foreach (var chunk in _inner.ChunkAsync(document, cancellationToken).ConfigureAwait(false))
@@ -73,6 +98,117 @@ public sealed class TokenAwareChunker : IChunker
                 emittedIndex++;
             }
         }
+    }
+
+    /// <summary>
+    /// Splits an existing chunk if its token count exceeds <see cref="MaxTokens"/>.
+    /// If the chunk fits within budget, it is yielded unchanged.
+    /// </summary>
+    public IEnumerable<DocumentChunk> SplitIfNeeded(DocumentChunk chunk)
+    {
+        ArgumentNullException.ThrowIfNull(chunk);
+
+        if (_tokenCounter.CountTokens(chunk.Text) <= MaxTokens)
+        {
+            yield return chunk;
+            yield break;
+        }
+
+        int subIndex = 0;
+        foreach (var piece in SplitToBudget(chunk))
+        {
+            yield return piece with
+            {
+                ChunkId = subIndex == 0 ? chunk.ChunkId : $"{chunk.ChunkId}.{subIndex}"
+            };
+            subIndex++;
+        }
+    }
+
+    /// <summary>
+    /// Enforces the token budget across an enumerable sequence of chunks,
+    /// re-splitting any chunks that exceed <see cref="MaxTokens"/> and re-indexing chunk indices.
+    /// </summary>
+    public IEnumerable<DocumentChunk> EnforceBudget(IEnumerable<DocumentChunk> chunks)
+    {
+        ArgumentNullException.ThrowIfNull(chunks);
+
+        int emittedIndex = 0;
+        foreach (var chunk in chunks)
+        {
+            if (_tokenCounter.CountTokens(chunk.Text) <= MaxTokens)
+            {
+                yield return chunk with
+                {
+                    ChunkIndex = emittedIndex,
+                    ChunkId = $"{chunk.DocumentId}#{emittedIndex}"
+                };
+                emittedIndex++;
+                continue;
+            }
+
+            foreach (var piece in SplitToBudget(chunk))
+            {
+                yield return piece with
+                {
+                    ChunkIndex = emittedIndex,
+                    ChunkId = $"{chunk.DocumentId}#{emittedIndex}"
+                };
+                emittedIndex++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Enforces the token budget across an async enumerable stream of chunks,
+    /// re-splitting any chunks that exceed <see cref="MaxTokens"/> and re-indexing chunk indices.
+    /// </summary>
+    public async IAsyncEnumerable<DocumentChunk> EnforceBudgetAsync(
+        IAsyncEnumerable<DocumentChunk> chunks,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(chunks);
+
+        int emittedIndex = 0;
+        await foreach (var chunk in chunks.WithCancellation(cancellationToken).ConfigureAwait(false))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (_tokenCounter.CountTokens(chunk.Text) <= MaxTokens)
+            {
+                yield return chunk with
+                {
+                    ChunkIndex = emittedIndex,
+                    ChunkId = $"{chunk.DocumentId}#{emittedIndex}"
+                };
+                emittedIndex++;
+                continue;
+            }
+
+            foreach (var piece in SplitToBudget(chunk))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return piece with
+                {
+                    ChunkIndex = emittedIndex,
+                    ChunkId = $"{chunk.DocumentId}#{emittedIndex}"
+                };
+                emittedIndex++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Static helper to split a single chunk to fit within <paramref name="maxTokens"/> using <paramref name="tokenCounter"/>.
+    /// </summary>
+    public static IEnumerable<DocumentChunk> SplitToBudget(DocumentChunk chunk, ITokenCounter tokenCounter, int maxTokens)
+    {
+        ArgumentNullException.ThrowIfNull(chunk);
+        ArgumentNullException.ThrowIfNull(tokenCounter);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxTokens);
+
+        var splitter = new TokenAwareChunker(tokenCounter, maxTokens);
+        return splitter.SplitIfNeeded(chunk);
     }
 
     /// <summary>
