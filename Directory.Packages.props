@@ -1,0 +1,236 @@
+<Project>
+
+  <!--
+    Central Package Management for the entire solution.
+
+    Versions are pinned and verified against NuGet at the start of each phase.
+    See docs/decisions/0005-version-drift-from-mission-brief.md for the
+    May 2026 reconciliation between the mission brief's pins and the actual
+    GA versions on NuGet at the time of writing.
+  -->
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="Microsoft Agent Framework (MAF) — 1.20.0 stable (August 2026)">
+    <!--
+      Stable release line. Pin to the exact patch version below; the project
+      bumps deliberately, not by floating on a range. Verify against the
+      release notes when upgrading.
+      Release notes: https://github.com/microsoft/agent-framework/releases/tag/dotnet-1.20.0
+      Bump rationale: docs/decisions/0016-maf-1.20.md (supersedes 0015)
+    -->
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.20.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.Abstractions" Version="1.20.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.20.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.Workflows" Version="1.20.0" />
+    <!-- Azure AI Foundry integration. This sub-package never left preview
+         (GA stops at 1.5.0); track the matching 1.20.0 preview so the Ch 6/14
+         Foundry samples resolve a real version if enabled. No project
+         references it today — the pin is here to keep the version coherent. -->
+    <PackageVersion Include="Microsoft.Agents.AI.Foundry" Version="1.20.0-preview.260831.1" />
+    <!-- A2A remains preview at the 1.20.0 milestone — see ADR-0016. Like Foundry,
+         these two are coherence pins: no project in this solution references them. -->
+    <PackageVersion Include="Microsoft.Agents.AI.A2A" Version="1.20.0-preview.260831.1" />
+    <PackageVersion Include="Microsoft.Agents.AI.Hosting.A2A.AspNetCore" Version="1.20.0-preview.260831.1" />
+    <!-- Mem0 long-term memory provider (Ch 19). Ships on its OWN preview line
+         (1.0.0-preview), NOT the MAF core line — never "bump" it to the MAF version.
+         Used for the optional managed-memory registration path beside the
+         hand-rolled SmartDocsMemoryProvider (AIContextProvider over the Ch6 stack). -->
+    <PackageVersion Include="Microsoft.Agents.AI.Mem0" Version="1.0.0-preview.251028.1" />
+    <!-- NOTE: there is NO standalone Microsoft.Agents.AI.OpenTelemetry package
+         on NuGet (the prior 1.8.0 pin referenced a non-existent id and only
+         survived because no project consumed it). MAF agent telemetry comes
+         from Microsoft.Agents.AI core + Microsoft.Extensions.AI's
+         OpenTelemetryChatClient, exported via the OpenTelemetry.* packages
+         below. Do NOT re-add a Microsoft.Agents.AI.OpenTelemetry pin. -->
+  </ItemGroup>
+
+  <ItemGroup Label="Microsoft.Extensions.AI — unified IChatClient / IEmbeddingGenerator">
+    <!-- 10.9.0 is the floor MAF 1.19.0+ declares (it was 10.7.0 through 1.18.0). -->
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Microsoft.Extensions.AI.Evaluation — first-party .NET eval (Ch 20)">
+    <!-- Evaluation / Quality / Reporting ship stable on the 10.9.0 line; Safety
+         and NLP are preview-only on that line (user-approved). Some evaluators
+         (RTC, the 10.9 agent-quality trio, etc.) are gated behind the AIEVAL001
+         experimental diagnostic — the eval sample projects add
+         <NoWarn>$(NoWarn);AIEVAL001</NoWarn>. -->
+    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation.Quality" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation.Reporting" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation.Safety" Version="10.9.0-preview.1.26411.16" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation.NLP" Version="10.9.0-preview.1.26411.16" />
+  </ItemGroup>
+
+  <ItemGroup Label="LLM provider SDKs">
+    <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
+    <!-- Microsoft.Extensions.AI.OpenAI 10.9.0 caps the OpenAI SDK at 2.12.x
+         (2.13.0 exists on NuGet but is outside the cap until MEAI 10.9.1). -->
+    <PackageVersion Include="OpenAI" Version="2.12.0" />
+    <!-- NOTE (Ch 23): Azure AI Content Safety "Prompt Shields" is GA but, in
+         .NET, REST-only — there is NO ShieldPrompt method in any shipped
+         Azure.AI.ContentSafety NuGet (only 1.0.0-beta.1 / 1.0.0 exist, both
+         api-version 2023-10-01, which predates Prompt Shields). So
+         PromptShieldDetector is a thin typed HttpClient client over
+         POST .../contentsafety/text:shieldPrompt?api-version=2024-09-01 and
+         needs no SDK package. Do NOT re-add an Azure.AI.ContentSafety pin
+         expecting a Prompt Shields API — it isn't there. -->
+    <!-- Azure.Identity — keyless auth for the Ch 23 secure-Azure samples
+         (DefaultAzureCredential in dev → ManagedIdentityCredential in prod),
+         per the chapter's "no keys in config" guidance. Only the Ch23 Azure
+         samples reference it directly; the SmartDocs.Security library stays
+         credential-agnostic (PromptShieldDetector takes a caller-configured
+         HttpClient — endpoint + bearer/key header — so it needs no Azure SDK
+         package at all, just the built-in System.Net.Http + System.Text.Json). -->
+    <PackageVersion Include="Azure.Identity" Version="1.21.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Microsoft.Extensions.VectorData — abstractions GA, connectors preview">
+    <!-- 10.8.2 is the floor MAF 1.20.0 declares (10.7.0 through 1.19.0). Held at
+         the floor rather than 10.9.0 so both books in the series pin the same value. -->
+    <PackageVersion Include="Microsoft.Extensions.VectorData.Abstractions" Version="10.8.2" />
+    <!-- Connectors ship as CommunityToolkit.VectorData.* and are pinned in the
+         projects that consume them (Phase 2, Ch 6). -->
+  </ItemGroup>
+
+  <ItemGroup Label="Microsoft.Extensions.* — hosting, configuration, DI, resilience">
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Options.DataAnnotations" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.7.0" />
+    <PackageVersion Include="Microsoft.Extensions.Resilience" Version="10.7.0" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup Label="DI composition (Scrutor — Ch 9 reranking decorator)">
+    <!-- Scrutor.Decorate wraps the registered IRetriever with RerankingMiddleware
+         so reranking is transparent to RagPipeline (Ch 9 DI wiring). -->
+    <PackageVersion Include="Scrutor" Version="7.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Roslyn (used by CodeFileChunker in Ch 4)">
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="PDF parsing (used in Ch 5 multimodal)">
+    <PackageVersion Include="PdfPig" Version="0.1.14" />
+  </ItemGroup>
+
+  <ItemGroup Label="Tokenizers, embeddings, local LLMs">
+    <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
+    <!-- Tiktoken encoding-data packages — required at runtime by
+         TiktokenTokenizer.CreateForEncoding(). Shipped separately so apps
+         only pay disk space for the encodings they actually use. -->
+    <PackageVersion Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" Version="2.0.0" />
+    <PackageVersion Include="Microsoft.ML.Tokenizers.Data.O200kBase" Version="2.0.0" />
+    <!-- Pin the patched Microsoft.Bcl.Memory transitive: M.ML.Tokenizers 2.0.0
+         pulls 9.0.4 which has GHSA-73j8-2gch-69rq (high severity). -->
+    <PackageVersion Include="Microsoft.Bcl.Memory" Version="10.0.11" />
+    <PackageVersion Include="OllamaSharp" Version="5.4.25" />
+    <!-- ONNX Runtime for the self-hosted cross-encoder reranker (Ch 9). Pulls
+         native binaries, so it is referenced ONLY by the opt-in
+         SmartDocs.Reranking.Onnx adapter — never by the lean core reranking
+         library — keeping the native dependency off every other consumer. -->
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.27.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Vector and graph databases">
+    <PackageVersion Include="Qdrant.Client" Version="1.19.0" />
+    <PackageVersion Include="Neo4j.Driver" Version="6.2.1" />
+    <!-- Azure AI Search adapter (Ch 6). 12.0.0 is the current stable major and
+         ships a net10.0 target; its SearchIndexClient/SearchClient + vector-query
+         surface (VectorSearchField, HnswAlgorithmConfiguration, VectorizedQuery)
+         is what AzureAiSearchVectorStore targets. -->
+    <PackageVersion Include="Azure.Search.Documents" Version="12.0.0" />
+    <!-- Postgres + pgvector hybrid adapter (Ch 14). Npgsql 10.x is the
+         net10-aligned major; the PostgresHybridRetriever runs the RRF-in-SQL
+         CTE (websearch_to_tsquery + ts_rank_cd + the <=> cosine operator) over
+         a raw connection — the embedding is passed as a ::vector literal, so no
+         separate pgvector binding package is required. -->
+    <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <!-- SQLite embedded database for local file-based / in-memory vector storage -->
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup Label="Resilience">
+    <PackageVersion Include="Polly" Version="8.6.6" />
+    <PackageVersion Include="Polly.Extensions" Version="8.6.6" />
+  </ItemGroup>
+
+  <ItemGroup Label="Observability — OpenTelemetry">
+    <PackageVersion Include="OpenTelemetry" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Api" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Model Context Protocol (MCP) — spec 2026-07-28, C# SDK 2.x">
+    <!-- 2.x is stateless-by-default (no initialize handshake, no Mcp-Session-Id).
+         Requires Microsoft.Extensions.AI.Abstractions >= 10.8.3 — satisfied by the
+         10.9.0 pins above. Bump rationale: docs/decisions/0016-maf-1.20.md -->
+    <PackageVersion Include="ModelContextProtocol" Version="2.2.0" />
+    <PackageVersion Include="ModelContextProtocol.Core" Version="2.2.0" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="CLI tooling">
+    <PackageVersion Include="System.CommandLine" Version="2.0.7" />
+  </ItemGroup>
+
+  <ItemGroup Label="ASP.NET Core 10 — first-class OpenAPI 3.1 (no Swashbuckle needed)">
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
+    <!-- Transitive of AspNetCore.OpenApi 10.0.11; pinned to 2.7.5 to clear
+         GHSA-v5pm-xwqc-g5wc (NU1903 high-severity, affects 2.0.0-preview.11..2.7.4,
+         fixed in 2.7.5). Auto-applied via CentralPackageTransitivePinningEnabled. -->
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.7.5" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
+    <!-- JWT bearer auth for the Ch 18 Streamable-HTTP MCP host (OAuth 2.0
+         resource-server model): MapMcp().RequireAuthorization() over a JWT.
+         Microsoft.IdentityModel.* / System.IdentityModel.Tokens.Jwt come in
+         transitively and are auto-pinned by CPM transitive pinning. -->
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.11" />
+  </ItemGroup>
+
+  <ItemGroup Label="Testing">
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+    <PackageVersion Include="coverlet.collector" Version="10.0.0" />
+    <PackageVersion Include="Moq" Version="4.20.72" />
+    <!-- Integration tests hit locally-installed services on their default
+         ports behind RUN_*_INTEGRATION env gates (see docs/local-setup.md);
+         no Docker/Testcontainers dependency. -->
+  </ItemGroup>
+
+  <ItemGroup Label="Numerics (Ch 22 DriftAdapter — Orthogonal Procrustes via SVD)">
+    <PackageVersion Include="MathNet.Numerics" Version="5.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Benchmarking">
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+  </ItemGroup>
+
+</Project>

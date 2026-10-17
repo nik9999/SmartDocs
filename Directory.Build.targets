@@ -1,0 +1,34 @@
+<Project>
+
+  <!--
+    Solution-wide packaging defaults that depend on each project's IsPackable
+    value. This file is imported AFTER the project body, so by the time these
+    conditions evaluate, a packable library has already set
+    <IsPackable>true</IsPackable> in its .csproj. (Doing this in
+    Directory.Build.props would not work — see the note there.)
+
+    Source Link, symbol packaging, and determinism here are all SDK-native
+    (the .NET 8+ SDK ships the Source Link targets in-box) — NO
+    Microsoft.SourceLink.GitHub package pin is required.
+  -->
+
+  <PropertyGroup Condition="'$(IsPackable)' == 'true'">
+    <!-- Per-package README, shipped beside each .csproj (see the ItemGroup). -->
+    <PackageReadmeFile Condition="'$(PackageReadmeFile)' == ''">README.md</PackageReadmeFile>
+
+    <!-- SDK-native Source Link + determinism + symbols (no package needed). -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <!-- Pack each packable project's own README.md at the package root so the
+       PackageReadmeFile reference above resolves. -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true' And Exists('$(MSBuildProjectDirectory)/README.md')">
+    <None Include="$(MSBuildProjectDirectory)/README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+</Project>

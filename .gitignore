@@ -1,0 +1,104 @@
+# =====================================================================
+#  RAG in .NET — Companion Code .gitignore
+# =====================================================================
+
+# .NET build outputs
+**/bin/
+**/obj/
+**/out/
+*.dll
+*.exe
+*.pdb
+*.cache
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+.idea/
+*.DotSettings.user
+
+# Test output
+TestResults/
+[Tt]est[Rr]esults/
+*.coverage
+*.coveragexml
+coverage/
+
+# NuGet
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+!packages/build/
+**/packages/*
+!**/packages/build/
+
+# Rider / dotCover
+_ReSharper*/
+*.[Cc]ache
+ReSharper.DotCover/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+appsettings.Development.json
+appsettings.Local.json
+appsettings.Secrets.json
+secrets.json
+*.pfx
+*.snk
+
+# Logs
+*.log
+logs/
+
+# Generated dataset cache (regeneratable)
+data/eval-sets/cache/
+data/.cache/
+
+# Tooling
+tools/eval-runner/results/
+tools/deepeval-bridge/__pycache__/
+tools/deepeval-bridge/.venv/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker / infra local state
+infra/.env
+infra/data/
+
+# Bicep
+*.bicepparam.local
+
+# Concatenated source dumps generated for review tooling (regenerate as needed)
+*_Code.txt
+
+# Local ML models and weights
+models/bge-m3/*
+!models/bge-m3/.gitkeep
+models/bge-reranker-v2-m3/*
+!models/bge-reranker-v2-m3/.gitkeep
+*.onnx
+*.onnx_data
+!*.Onnx/
+!*.Onnx/**
+
+# Databases & local extraction cache
+*.db
+*.db-shm
+*.db-wal
+data/.extracted_images/
+
+

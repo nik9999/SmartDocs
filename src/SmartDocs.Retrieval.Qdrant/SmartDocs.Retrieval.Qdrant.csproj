@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>Qdrant vector-store adapter for the SmartDocs RAG stack: a QdrantVectorStore implementation of IVectorStore over the official Qdrant.Client gRPC client, plus the AddSmartDocsQdrantVectorStore DI helper. Install this package to retrieve from Qdrant.</Description>
+    <PackageTags>rag;qdrant;vector-store;vector-search;retrieval;ai;llm;dotnet</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- A real dependency edge: this leaf package depends on the umbrella
+         SmartDocs.Retrieval package, where the QdrantVectorStore type physically
+         lives (it depends on the umbrella's Qdrant filter compiler, so a clean
+         physical move would create a leaf<->umbrella cycle with the umbrella's
+         own AddSmartDocsQdrantVectorStore DI registration). This package
+         re-exports the type via [TypeForwardedTo] so consumers reference the
+         Qdrant-scoped package and resolve QdrantVectorStore through it. -->
+    <ProjectReference Include="..\SmartDocs.Core\SmartDocs.Core.csproj" />
+    <ProjectReference Include="..\SmartDocs.Retrieval\SmartDocs.Retrieval.csproj" />
+  </ItemGroup>
+
+</Project>

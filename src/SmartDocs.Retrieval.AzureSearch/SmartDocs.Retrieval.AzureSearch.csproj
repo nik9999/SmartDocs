@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>Azure AI Search adapters for the SmartDocs RAG stack: AzureAiSearchVectorStore (an IVectorStore over Azure.Search.Documents) and AzureAiSearchHybridRetriever (vector + keyword fused by Azure's built-in RRF, with an optional semantic ranker). Install this package to retrieve from Azure AI Search.</Description>
+    <PackageTags>rag;azure;azure-ai-search;vector-store;hybrid-search;retrieval;ai;llm;dotnet</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Real dependency edge onto the umbrella SmartDocs.Retrieval package,
+         where both Azure adapters live (the hybrid retriever uses the umbrella's
+         SearchDocumentRecord and the vector store uses the umbrella's Azure
+         filter compiler; the umbrella DI extension references both). Re-exported
+         here via [TypeForwardedTo] so this Azure-scoped package is the handle. -->
+    <ProjectReference Include="..\SmartDocs.Core\SmartDocs.Core.csproj" />
+    <ProjectReference Include="..\SmartDocs.Retrieval\SmartDocs.Retrieval.csproj" />
+  </ItemGroup>
+
+</Project>

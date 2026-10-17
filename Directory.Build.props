@@ -1,0 +1,75 @@
+<Project>
+
+  <!--
+    Solution-wide MSBuild defaults.
+
+    Every src/ project inherits these. Test projects override TreatWarningsAsErrors
+    via Directory.Build.props in tests/ to allow xUnit analyzer false-positives if
+    they appear after a package bump.
+  -->
+
+  <PropertyGroup Label="Target framework and language">
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Quality bar">
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <AnalysisMode>Recommended</AnalysisMode>
+    <RunAnalyzersDuringBuild>true</RunAnalyzersDuringBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- CS1591: missing XML docs on public types — chapters introduce these incrementally. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Build determinism and reproducibility">
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Package metadata">
+    <Authors>Rachid Dahir</Authors>
+    <Company>Rachid Dahir</Company>
+    <Product>RAG in .NET — Companion Code</Product>
+    <Copyright>© 2026 Rachid Dahir</Copyright>
+    <RepositoryUrl>https://github.com/RachidD68/production-grade-rag-with-csharp-and-dotnet</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/RachidD68/production-grade-rag-with-csharp-and-dotnet</PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <!-- Single source of truth for the published-package version (Ch 25). The
+         whole companion library ships as one coherent 1.0.0 wave; bump here. -->
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <!-- TODO (Ch 25 strong-naming): ship the src libraries strong-named with a
+       shared .snk:
+         <SignAssembly>true</SignAssembly>
+         <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)SmartDocs.snk</AssemblyOriginatorKeyFile>
+       Deferred to keep the build green. Friction not cleanly resolvable here:
+       once an assembly is strong-named, its InternalsVisibleTo entries must carry
+       the full public key — SmartDocs.Retrieval, generate-dataset, and eval-runner
+       expose internals to SmartDocs.UnitTests (and Core to its test projects), so
+       every IVT would need the PublicKey appended AND the test/tool projects would
+       need to be signed with (or trust) the same key. Doing that half-way breaks
+       InternalsVisibleTo resolution. Revisit with a generated SmartDocs.snk + a
+       PublicKey-qualified IVT pass once the package set is otherwise stable. -->
+
+  <!--
+    Nothing in src/ packs by default. A library opts in with
+    <IsPackable>true</IsPackable> in its own .csproj; the shared packaging
+    defaults (README, Source Link, symbols, determinism) then switch on
+    automatically. Those defaults live in Directory.Build.targets, NOT here,
+    because a project's IsPackable value is set in the project BODY — which is
+    evaluated AFTER this .props import but BEFORE the .targets import. Putting
+    the IsPackable-conditioned packaging block in .props would evaluate the
+    condition before IsPackable exists and silently skip it.
+
+    Apps, samples, tools, and test projects stay IsPackable=false (the .NET SDK
+    default is true, so the non-library projects set false explicitly).
+  -->
+
+</Project>

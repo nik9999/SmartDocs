@@ -1,0 +1,22 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SmartDocs.Core/SmartDocs.Core.csproj" />
+    <Project Path="src/SmartDocs.Ingestion/SmartDocs.Ingestion.csproj" />
+    <Project Path="src/SmartDocs.GigaChat/SmartDocs.GigaChat.csproj" />
+    <Project Path="src/SmartDocs.Retrieval/SmartDocs.Retrieval.csproj" />
+    <Project Path="src/SmartDocs.Retrieval.AzureSearch/SmartDocs.Retrieval.AzureSearch.csproj" />
+    <Project Path="src/SmartDocs.Retrieval.Postgres/SmartDocs.Retrieval.Postgres.csproj" />
+    <Project Path="src/SmartDocs.Retrieval.Qdrant/SmartDocs.Retrieval.Qdrant.csproj" />
+    <Project Path="src/SmartDocs.Retrieval.Sqlite/SmartDocs.Retrieval.Sqlite.csproj" />
+    <Project Path="src/SmartDocs.Reranking/SmartDocs.Reranking.csproj" />
+    <Project Path="src/SmartDocs.Reranking.Onnx/SmartDocs.Reranking.Onnx.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/ChunkingPlayground/ChunkingPlayground.csproj" />
+    <Project Path="samples/ChunkingStrategy/ChunkingStrategy.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SmartDocs.GigaChat.Tests/SmartDocs.GigaChat.Tests.csproj" />
+    <Project Path="tests/SmartDocs.Ingestion.Tests/SmartDocs.Ingestion.Tests.csproj" />
+  </Folder>
+</Solution>

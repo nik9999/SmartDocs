@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>SQLite embedded vector store for the SmartDocs RAG stack: SqliteVectorStore provides fast file-based or in-memory vector storage with SIMD-accelerated cosine similarity.</Description>
+    <PackageTags>rag;sqlite;vector-store;vector-search;retrieval;ai;llm;dotnet</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SmartDocs.Core\SmartDocs.Core.csproj" />
+    <ProjectReference Include="..\SmartDocs.Retrieval\SmartDocs.Retrieval.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Description>Postgres + pgvector single-store hybrid retriever for the SmartDocs RAG stack: PostgresHybridRetriever runs dense ranking, full-text ranking, and Reciprocal Rank Fusion inside one SQL round-trip over Npgsql. Install this package to use Postgres as "the database is the hybrid".</Description>
+    <PackageTags>rag;postgres;pgvector;hybrid-search;rrf;retrieval;ai;llm;dotnet</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Real dependency edge onto the umbrella SmartDocs.Retrieval package,
+         where PostgresHybridRetriever lives and is wired into the umbrella's
+         AddSmartDocsHybridRetriever DI registration. Re-exported here via
+         [TypeForwardedTo] so the Postgres-scoped package is the install handle. -->
+    <ProjectReference Include="..\SmartDocs.Core\SmartDocs.Core.csproj" />
+    <ProjectReference Include="..\SmartDocs.Retrieval\SmartDocs.Retrieval.csproj" />
+  </ItemGroup>
+
+</Project>
