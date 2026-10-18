@@ -257,7 +257,7 @@ var testQueries = new[]
     new { Query = "Каковы условия отпуска и больничного для инженеров?", Lang = "RU", Target = "PDF/MD Vacation Policies (Инженеры: 28 дней, 100% оклада)" },
     new { Query = "Каковы технические характеристики и напряжение питания модуля МВА8?", Lang = "RU", Target = "re_mva8.pdf (Модуль ввода аналоговый: 90...245 В, 8 каналов, RS-485)" },
     new { Query = "Схема подключения датчиков к клеммной колодке прибора МВА8", Lang = "RU", Target = "re_mva8.pdf (Приложение Б: клеммная колодка, термопреобразователи)" },
-    new { Query = "Условия эксплуатации и правила монтажа прибора ПИМФ", Lang = "RU", Target = "ПИМФ.421729.006 РЭ (Руководство по эксплуатации: монтаж, безопасность)" },
+    new { Query = "Комплектность, гарантийные обязательства и условия эксплуатации прибора ПИМФ", Lang = "RU", Target = "ПИМФ.426439.004 ПС (Паспорт: характеристики, комплектность, гарантия)" },
     new { Query = "What was the enterprise cloud revenue and net profit in Q3 2026?", Lang = "EN", Target = "Excel Financial Spreadsheet ($45.2M / $14.8M)" },
     new { Query = "Microservices architecture with Redis cache and API Gateway", Lang = "EN", Target = "Word Document + Architecture Diagram" },
     new { Query = "Server configurations with 8x NVIDIA GPUs and high memory for AI", Lang = "EN", Target = "Markdown Product Catalog (DGX-H100 / HGX-L40S)" },
