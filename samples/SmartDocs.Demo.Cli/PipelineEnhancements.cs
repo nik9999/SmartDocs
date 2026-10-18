@@ -50,12 +50,14 @@ public sealed class ContravtPdfDocumentLoader(HttpClient? httpClient = null) : I
 
         var sb = new StringBuilder();
         using var document = PdfDocument.Open(pdfBytes);
+        var (metadata, detectedDocCode) = ExtractMetadata(document, localPdfPath);
 
         foreach (Page page in document.GetPages())
         {
             sb.AppendLine(CultureInfo.InvariantCulture, $"[Page {page.Number}]");
             var cleanedLines = ExtractLinesFromPage(page)
-                .Where(line => !line.Contains("ПИМФ.426439.004 РЭ", StringComparison.Ordinal) && !Regex.IsMatch(line, @"^Стр\.\s*\d+$"));
+                .Where(line => (string.IsNullOrEmpty(detectedDocCode) || !line.Contains(detectedDocCode, StringComparison.OrdinalIgnoreCase)) &&
+                               !Regex.IsMatch(line, @"^(Стр\.|Страница|Page)\s*\d+$", RegexOptions.IgnoreCase));
 
             foreach (var line in cleanedLines)
             {
@@ -71,19 +73,182 @@ public sealed class ContravtPdfDocumentLoader(HttpClient? httpClient = null) : I
             }
         }
 
-        var metadata = new DocumentMetadata(
-            Id: "PIMF-426439-004-RE-v13",
+        return new Document(metadata, sb.ToString(), localPdfPath);
+    }
+
+    private static (DocumentMetadata Metadata, string DetectedDocCode) ExtractMetadata(PdfDocument document, string localPdfPath)
+    {
+        string fileName = Path.GetFileNameWithoutExtension(localPdfPath);
+
+        // 1. Извлечение строк первой страницы
+        var page1Lines = document.NumberOfPages > 0
+            ? ExtractLinesFromPage(document.GetPage(1)).ToList()
+            : new List<string>();
+
+        // 2. Поиск шифра документа (ГОСТ, ТУ, ПИМФ и т.д.)
+        string detectedDocCode = string.Empty;
+        var codeRegex = new Regex(@"\b([А-ЯA-Z]{2,6}\.\d{3,6}\.\d{3,6}(\s*[А-ЯA-Z]{2,4})?(\s*v?\d+(\.\d+)?)?)\b", RegexOptions.IgnoreCase);
+        foreach (var line in page1Lines)
+        {
+            var match = codeRegex.Match(line);
+            if (match.Success)
+            {
+                detectedDocCode = match.Value.Trim();
+                break;
+            }
+        }
+        if (string.IsNullOrEmpty(detectedDocCode))
+        {
+            var match = codeRegex.Match(fileName);
+            if (match.Success)
+            {
+                detectedDocCode = match.Value.Trim();
+            }
+        }
+
+        // 3. Формирование стабильного ID документа
+        string rawId = !string.IsNullOrWhiteSpace(detectedDocCode) ? detectedDocCode : fileName;
+        string id = Regex.Replace(rawId, @"[^\p{L}\p{Nd}\.\-]+", "-").Trim('-');
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            id = "doc-" + Guid.NewGuid().ToString("N")[..8];
+        }
+
+        // 4. Определение заголовка (Title)
+        string title = string.Empty;
+        if (!string.IsNullOrWhiteSpace(document.Information.Title) &&
+            !Regex.IsMatch(document.Information.Title, @"^(untitled|содержание|оглавление|введение|документ|document|table of contents|microsoft word)", RegexOptions.IgnoreCase) &&
+            !document.Information.Title.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            title = document.Information.Title.Trim();
+        }
+
+        if (string.IsNullOrEmpty(title))
+        {
+            var candidateTitleLines = page1Lines
+                .Where(l => l.Length > 6 &&
+                            !Regex.IsMatch(l, @"^(ООО|ЗАО|ОАО|ПАО|АО|НПФ|НПО|тел|факс|www\.|http|e-mail|содержание|оглавление|введение|стр\.)", RegexOptions.IgnoreCase) &&
+                            !codeRegex.IsMatch(l))
+                .Take(2)
+                .ToList();
+
+            if (candidateTitleLines.Count > 0)
+            {
+                string combined = string.Join(" — ", candidateTitleLines);
+                title = !string.IsNullOrEmpty(detectedDocCode) && !combined.Contains(detectedDocCode, StringComparison.OrdinalIgnoreCase)
+                    ? $"{detectedDocCode} — {combined}"
+                    : combined;
+            }
+        }
+
+        if (string.IsNullOrEmpty(title))
+        {
+            title = fileName;
+        }
+
+        // 5. Определение автора (Author)
+        string author = string.Empty;
+        string company = string.Empty;
+
+        var orgLine = page1Lines.FirstOrDefault(l =>
+            Regex.IsMatch(l, @"(ООО|ЗАО|ОАО|ПАО|АО|НПФ|НПО|Предприятие|Завод|Компания|«[^»]+»|""[^""]+"")", RegexOptions.IgnoreCase));
+        if (!string.IsNullOrEmpty(orgLine))
+        {
+            var match = Regex.Match(orgLine, @"(«[^»]+»|""[^""]+""|[А-ЯA-Z][а-яa-zА-ЯA-Z\s\-]{3,30})");
+            company = match.Success ? match.Value.Trim(' ', '«', '»', '"') : orgLine.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(document.Information.Author) &&
+            !document.Information.Author.Contains("User", StringComparison.OrdinalIgnoreCase) &&
+            !document.Information.Author.Contains("Admin", StringComparison.OrdinalIgnoreCase))
+        {
+            author = document.Information.Author.Trim();
+            if (!string.IsNullOrEmpty(company) && !author.Contains(company, StringComparison.OrdinalIgnoreCase))
+            {
+                author = $"{author} ({company})";
+            }
+        }
+        else if (!string.IsNullOrEmpty(company))
+        {
+            author = company;
+        }
+        else
+        {
+            author = "Unknown";
+        }
+
+        // 6. Определение года (FiscalYear: год издания/редакции, не превышающий текущий)
+        int fiscalYear = 0;
+        int currentYear = DateTime.UtcNow.Year;
+        var yearRegex = new Regex(@"\b(19\d{2}|20\d{2})\b");
+        foreach (var line in page1Lines.AsEnumerable().Reverse())
+        {
+            var match = yearRegex.Match(line);
+            if (match.Success && int.TryParse(match.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int yr)
+                && yr >= 1990 && yr <= currentYear)
+            {
+                fiscalYear = yr;
+                break;
+            }
+        }
+
+        if (fiscalYear == 0 && File.Exists(localPdfPath))
+        {
+            var fileYear = File.GetLastWriteTime(localPdfPath).Year;
+            fiscalYear = fileYear <= currentYear ? fileYear : currentYear;
+        }
+        if (fiscalYear == 0)
+        {
+            fiscalYear = currentYear;
+        }
+
+        // 7. Определение даты последнего изменения (LastModified)
+        DateOnly lastModified = File.Exists(localPdfPath)
+            ? DateOnly.FromDateTime(File.GetLastWriteTime(localPdfPath))
+            : DateOnly.FromDateTime(DateTime.UtcNow);
+
+        // 8. Город / Офис (Office)
+        string office = "Central";
+        var cityLine = page1Lines.FirstOrDefault(l =>
+            Regex.IsMatch(l, @"(Москва|Санкт-Петербург|Нижний Новгород|Екатеринбург|Новосибирск|Казань|Самара|Челябинск|Уфа)", RegexOptions.IgnoreCase));
+        if (!string.IsNullOrEmpty(cityLine))
+        {
+            var cityMatch = Regex.Match(cityLine, @"(Москва|Санкт-Петербург|Нижний Новгород|Екатеринбург|Новосибирск|Казань|Самара|Челябинск|Уфа)", RegexOptions.IgnoreCase);
+            if (cityMatch.Success)
+            {
+                office = cityMatch.Value;
+            }
+        }
+
+        // 9. Тип документа (DocumentType)
+        string docType = "Specification";
+        string lowerFull = (title + " " + string.Join(" ", page1Lines)).ToLowerInvariant();
+        if (lowerFull.Contains("руководство по эксплуатации") || lowerFull.Contains("инструкция") || lowerFull.Contains("руководство пользователя"))
+        {
+            docType = "Runbook";
+        }
+        else if (lowerFull.Contains("паспорт") || lowerFull.Contains("технические условия") || lowerFull.Contains("спецификация"))
+        {
+            docType = "Specification";
+        }
+        else if (lowerFull.Contains("политика") || lowerFull.Contains("регламент"))
+        {
+            docType = "Policy";
+        }
+
+        var meta = new DocumentMetadata(
+            Id: id,
             Silo: "technical-docs",
             Department: "Engineering",
-            Office: "Montreal",
+            Office: office,
             ConfidentialityLevel: "Public",
-            DocumentType: "Specification",
-            FiscalYear: 2026,
-            Author: "КонтрАвт",
-            LastModified: new DateOnly(2026, 1, 1),
-            Title: "ПИМФ.426439.004 РЭ v13.0 — Модули ввода-вывода серии MDS");
+            DocumentType: docType,
+            FiscalYear: fiscalYear,
+            Author: author,
+            LastModified: lastModified,
+            Title: title);
 
-        return new Document(metadata, sb.ToString(), localPdfPath);
+        return (meta, detectedDocCode);
     }
 
     private static IEnumerable<string> ExtractLinesFromPage(Page page)

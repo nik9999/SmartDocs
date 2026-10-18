@@ -254,6 +254,9 @@ else
     Document rawDoc = await loader.LoadAsync(pdfPath);
     Document cleanDoc = preprocessor.Preprocess(rawDoc);
 
+    Console.WriteLine($"      [Метаданные] ID: {cleanDoc.Metadata.Id} | Заголовок: {cleanDoc.Metadata.Title}");
+    Console.WriteLine($"      [Метаданные] Автор: {cleanDoc.Metadata.Author} | Год: {cleanDoc.Metadata.FiscalYear} | Офис: {cleanDoc.Metadata.Office} | Тип: {cleanDoc.Metadata.DocumentType}");
+
     Console.WriteLine("[2/4] Выполнение мультимодального чанкинга и Contextual Retrieval...");
     Console.WriteLine("      (Для каждого чанка вызывается Contextual Retrieval через LLM)...");
     var chunks = new List<DocumentChunk>();
