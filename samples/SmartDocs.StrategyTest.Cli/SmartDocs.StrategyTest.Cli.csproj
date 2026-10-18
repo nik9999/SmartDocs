@@ -5,11 +5,13 @@
     <RootNamespace>SmartDocs.Samples.StrategyTest.Cli</RootNamespace>
     <AssemblyName>SmartDocs.StrategyTest.Cli</AssemblyName>
     <UserSecretsId>smartdocs-chunking-strategy</UserSecretsId>
+    <NoWarn>$(NoWarn);CA1305;CA1875;CA1861;CA1860;CA1304;CA1311;CA1848</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SmartDocs.Core\SmartDocs.Core.csproj" />
     <ProjectReference Include="..\..\src\SmartDocs.Ingestion\SmartDocs.Ingestion.csproj" />
+    <ProjectReference Include="..\..\src\SmartDocs.Retrieval\SmartDocs.Retrieval.csproj" />
     <ProjectReference Include="..\..\src\SmartDocs.GigaChat\SmartDocs.GigaChat.csproj" />
   </ItemGroup>
 

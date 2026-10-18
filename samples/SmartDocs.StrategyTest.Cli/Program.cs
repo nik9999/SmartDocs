@@ -4,9 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Security.Cryptography;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
@@ -19,6 +17,10 @@ using SmartDocs.GigaChat.Extensions;
 using SmartDocs.Ingestion.Chunking;
 using SmartDocs.Ingestion.Loaders;
 using SmartDocs.Ingestion.Preprocessing;
+using SmartDocs.Samples.StrategyTest.Cli.Benchmarking;
+using SmartDocs.Samples.StrategyTest.Cli.Cost;
+using SmartDocs.Samples.StrategyTest.Cli.Models;
+using SmartDocs.Samples.StrategyTest.Cli.Reports;
 
 namespace SmartDocs.Samples.StrategyTest.Cli;
 
@@ -31,7 +33,7 @@ internal static class Program
 
         PrintHeader();
 
-        // 1. Конфигурация и секреты (для опционального тестирования LLM / GigaChat)
+        // 1. Конфигурация и секреты (для GigaChat и настроек стоимости)
         var configuration = new ConfigurationBuilder()
             .AddJsonFile("appsettings.json", optional: true)
             .AddUserSecrets("smartdocs-chunking-strategy")
@@ -39,6 +41,7 @@ internal static class Program
             .Build();
 
         var tokenCounter = new TokenCounter();
+        var pricingModel = new CostPricingModel();
 
         // 2. Поиск и выбор PDF документа
         string? pdfPath = ResolvePdfPath(args);
@@ -47,15 +50,12 @@ internal static class Program
             Console.ForegroundColor = ConsoleColor.Red;
             Console.WriteLine("[ОШИБКА] Не найден ни один PDF-файл в папке 'Documents' и не передан путь в аргументах.");
             Console.ResetColor();
-            Console.WriteLine("Поместите PDF-файл документации в каталог 'Documents' или запустите:");
-            Console.WriteLine("  dotnet run --project samples/SmartDocs.StrategyTest.Cli -- \"C:\\path\\to\\manual.pdf\"");
             return 1;
         }
 
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine($"[1/4] Загрузка PDF документа: {Path.GetFileName(pdfPath)}");
+        Console.WriteLine($"[1/5] Загрузка и предобработка PDF документа: {Path.GetFileName(pdfPath)}");
         Console.ResetColor();
-        Console.WriteLine($"      Полный путь: {pdfPath}");
 
         // 3. Загрузка через PdfDocumentLoader
         var loader = new PdfDocumentLoader(new PdfDocumentLoaderOptions
@@ -78,41 +78,33 @@ internal static class Program
         }
 
         // 4. Предобработка через DocumentPreprocessor
-        Console.WriteLine("\n[2/4] Предобработка документа через DocumentPreprocessor...");
         var preprocessor = new DocumentPreprocessor(new DocumentPreprocessorOptions
         {
             Dehyphenate = true,
             FilterEmptyPages = true,
             RemoveDotLeaders = true,
-            StripRepeatingHeadersAndFooters = false // сохраняем структуру страниц
+            StripRepeatingHeadersAndFooters = false
         });
 
         var doc = preprocessor.Preprocess(rawDoc);
-
         int totalTokens = tokenCounter.CountTokens(doc.Content);
-        Console.WriteLine($"      Метаданные:");
-        Console.WriteLine($"        * Id:           {doc.Metadata.Id}");
-        Console.WriteLine($"        * Title:        {doc.Metadata.Title}");
-        Console.WriteLine($"        * Author:       {doc.Metadata.Author}");
-        Console.WriteLine($"        * Office:       {doc.Metadata.Office}");
-        Console.WriteLine($"        * FiscalYear:   {doc.Metadata.FiscalYear}");
-        Console.WriteLine($"        * DocumentType: {doc.Metadata.DocumentType}");
-        Console.WriteLine($"        * Silo:         {doc.Metadata.Silo}");
-        Console.WriteLine($"      Сырой текст:          {rawDoc.Content.Length:N0} символов");
-        Console.WriteLine($"      После предобработки:  {doc.Content.Length:N0} символов (~{totalTokens:N0} токенов)");
 
-        // 5. Инициализация моделей (BGE-M3 для Semantic, GigaChat для Contextual)
+        Console.WriteLine($"      [Метаданные] Id: {doc.Metadata.Id} | Заголовок: {doc.Metadata.Title}");
+        Console.WriteLine($"      [Метаданные] Автор: {doc.Metadata.Author} | Год: {doc.Metadata.FiscalYear} | Офис: {doc.Metadata.Office} | Тип: {doc.Metadata.DocumentType}");
+        Console.WriteLine($"      [Объем] Текст: {rawDoc.Content.Length:N0} -> {doc.Content.Length:N0} символов (~{totalTokens:N0} токенов)");
+
+        // 5. Инициализация моделей (локальный BGE-M3 и GigaChat)
         var bgeGenerator = TryInitBgeM3();
         var chatClient = TryInitChatClient(configuration);
 
-        // 6. Формирование набора стратегий
+        // 6. Формирование пула стратегий чанкинга
         var strategySuite = BuildStrategySuite(tokenCounter, bgeGenerator);
 
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine($"\n[3/4] Сравнение {strategySuite.Count} стратегий чанкинга на одном документе...");
+        Console.WriteLine($"\n[2/5] Выполнение чанкинга для {strategySuite.Count} стратегий и формирование Отчёта 1 (Chunking Quality)...");
         Console.ResetColor();
 
-        var results = new List<StrategyResult>();
+        var chunkMetrics = new List<ChunkingQualityMetric>();
 
         foreach (var (name, description, chunker) in strategySuite)
         {
@@ -127,9 +119,9 @@ internal static class Program
                 }
                 sw.Stop();
 
-                var eval = AnalyzeChunks(name, description, chunks, tokenCounter, sw.ElapsedMilliseconds);
-                results.Add(eval);
-                Console.WriteLine($"  * [{name,-32}] получено {chunks.Count,3} чанков за {sw.ElapsedMilliseconds,4} мс");
+                var metric = ChunkingQualityAnalyzer.Analyze(name, description, doc, chunks, tokenCounter, sw.ElapsedMilliseconds);
+                chunkMetrics.Add(metric);
+                Console.WriteLine($"  * [{name,-32}] получено {chunks.Count,3} чанков за {sw.ElapsedMilliseconds,4} мс (дефектов: {metric.BrokenTablesCount + metric.OrphanedTableRowsCount + metric.OverBudget256Count,2})");
             }
             catch (Exception ex)
             {
@@ -139,22 +131,107 @@ internal static class Program
             }
         }
 
-        // 7. Сводная таблица сравнения
-        PrintSummaryTable(results);
+        // Вывод сводной таблицы качества чанкинга в консоль
+        PrintChunkingQualityTable(chunkMetrics);
 
-        // 8. Подробный анализ распределения и проблем для каждой стратегии
-        PrintDetailedDiagnostics(results);
+        // 7. Отчёт 2: Retrieval Benchmark (Recall@5, Recall@10, MRR, nDCG@10, Zero-Hit Rate)
+        var benchmarkQueries = BenchmarkDataset.GetPassportQueries();
+        var retrievalMetrics = new List<RetrievalBenchmarkMetric>();
 
-        // 9. Визуальная оценка репрезентативных чанков
-        PrintVisualChunkSamples(results);
+        if (bgeGenerator != null)
+        {
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine($"\n[3/5] Запуск Retrieval Benchmark (Отчёт 2) на {benchmarkQueries.Count} контрольных вопросах через BGE-M3...");
+            Console.ResetColor();
 
-        // 10. Опциональный этап: отдельное тестирование ContextualChunker
-        Console.WriteLine();
-        PrintContextualizationTest(doc, chatClient);
+            foreach (var metric in chunkMetrics)
+            {
+                Console.Write($"  * Оценка поиска для [{metric.StrategyName,-32}]... ");
+                var retMetric = await RetrievalEvaluator.EvaluateAsync(
+                    metric.StrategyName,
+                    metric.Chunks,
+                    bgeGenerator,
+                    benchmarkQueries);
+
+                retrievalMetrics.Add(retMetric);
+                Console.WriteLine($"Recall@5: {retMetric.RecallAt5:P0} | MRR: {retMetric.Mrr:F3} | nDCG@10: {retMetric.NdcgAt10:F3} | Zero-Hit: {retMetric.ZeroHitRatePercent:F0}%");
+            }
+
+            PrintRetrievalBenchmarkTable(retrievalMetrics);
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("\n[3/5] Пропуск Retrieval Benchmark: модель BGE-M3 недоступна.");
+            Console.ResetColor();
+        }
+
+        // 8. Отчёт 3: Answer Quality & Cost Report (Правильность, Обоснованность, Задержки, Токены, Рублевая стоимость)
+        var answerMetrics = new List<AnswerQualityCostMetric>();
+
+        if (bgeGenerator != null)
+        {
+            Console.ForegroundColor = ConsoleColor.Cyan;
+            Console.WriteLine("\n[4/5] Запуск Answer Quality & Cost (Отчёт 3) на репрезентативных стратегиях...");
+            Console.ResetColor();
+
+            // Выбираем ключевые стратегии для генерации ответов и подсчета стоимости
+            string[] selectedStrategies =
+            [
+                "Sentence(5) + Token(200)",
+                "Recursive(800) + Token(256)",
+                "FixedSize (500 / ov 100)",
+                "Semantic (thresh 0.70)"
+            ];
+
+            var targetChunks = chunkMetrics
+                .Where(m => selectedStrategies.Contains(m.StrategyName, StringComparer.OrdinalIgnoreCase))
+                .ToList();
+
+            if (targetChunks.Count == 0)
+            {
+                targetChunks = chunkMetrics.Take(3).ToList();
+            }
+
+            foreach (var cm in targetChunks)
+            {
+                Console.Write($"  * Генерация RAG-ответов и расчет стоимости для [{cm.StrategyName}]... ");
+                var ansMetric = await AnswerEvaluator.EvaluateAsync(
+                    cm.StrategyName,
+                    cm.Chunks,
+                    cm.ElapsedMs,
+                    bgeGenerator,
+                    chatClient,
+                    tokenCounter,
+                    pricingModel,
+                    benchmarkQueries.Take(4).ToList()); // 4 контрольных вопроса для оценки генерации
+
+                answerMetrics.Add(ansMetric);
+                Console.WriteLine($"Правильность: {ansMetric.AvgCorrectnessScore:P0} | Задержка: {ansMetric.AvgTotalLatencyMs:F0} мс | Стоимость/запрос: {ansMetric.AvgCostPerQueryRubles:F4} ₽");
+            }
+
+            PrintAnswerQualityCostTable(answerMetrics);
+        }
+
+        // 9. Сохранение всех трёх отчётов на диск
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.WriteLine("\n[5/5] Формирование и сохранение всех отчётов в папку 'reports/'...");
+        Console.ResetColor();
+
+        string reportsDir = ResolveReportsDirectory();
+
+        string file1 = ReportWriters.WriteChunkingQualityReport(chunkMetrics, reportsDir);
+        string file2 = ReportWriters.WriteRetrievalBenchmarkReport(retrievalMetrics, reportsDir);
+        string file3 = ReportWriters.WriteAnswerQualityCostReport(answerMetrics, reportsDir);
+        string file4 = ReportWriters.WriteExecutiveSummaryReport(chunkMetrics, retrievalMetrics, answerMetrics, reportsDir);
 
         Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine("\n[ГОТОВО] Сравнение стратегий чанкинга успешно завершено.\n");
+        Console.WriteLine("\n[УСПЕХ] Все 3 отчёта и сводный Executive Summary успешно сформированы:");
         Console.ResetColor();
+        Console.WriteLine($"  1. Chunking Quality Report:       {file1}");
+        Console.WriteLine($"  2. Retrieval Benchmark Report:     {file2}");
+        Console.WriteLine($"  3. Answer Quality & Cost Report:   {file3}");
+        Console.WriteLine($"  4. Executive Summary Report:       {file4}\n");
 
         return 0;
     }
@@ -162,109 +239,73 @@ internal static class Program
     private static void PrintHeader()
     {
         Console.WriteLine("================================================================================");
-        Console.WriteLine("       SmartDocs: Лаборатория сравнения стратегий и качества чанкинга           ");
-        Console.WriteLine("       (Recursive, Sentence, FixedSize, TokenAware, Decorators & Semantic)      ");
+        Console.WriteLine("       SmartDocs: Лаборатория комплексной оценки стратегий чанкинга             ");
+        Console.WriteLine("       1. Chunking Quality | 2. Retrieval Benchmark | 3. Answer Quality & Cost  ");
         Console.WriteLine("================================================================================\n");
     }
 
-    private static string? ResolvePdfPath(string[] args)
+    private static void PrintChunkingQualityTable(IReadOnlyList<ChunkingQualityMetric> metrics)
     {
-        if (args.Length > 0 && !string.IsNullOrWhiteSpace(args[0]) && File.Exists(args[0]))
+        Console.WriteLine("\n=============================================================================================================");
+        Console.WriteLine("                         1. CHUNKING QUALITY REPORT (КАЧЕСТВО ЧАНКИНГА)                              ");
+        Console.WriteLine("=============================================================================================================");
+        Console.WriteLine(" Стратегия                      │ Чанков │ Символы (min/avg/max) │ Токены (min/avg/max) │ Покрытие │ Таблицы │ >256t │ Мета │ Время ");
+        Console.WriteLine("────────────────────────────────┼────────┼───────────────────────┼──────────────────────┼──────────┼─────────┼───────┼──────┼───────");
+
+        foreach (var m in metrics)
         {
-            return Path.GetFullPath(args[0]);
+            int tableIssues = m.BrokenTablesCount + m.OrphanedTableRowsCount;
+            Console.WriteLine(
+                $" {m.StrategyName,-30} │ {m.TotalChunks,6} │ " +
+                $"{m.CharMin,4}/{m.CharAvg,3:F0}/{m.CharMax,4} │ " +
+                $"{m.TokenMin,4}/{m.TokenAvg,3:F0}/{m.TokenMax,4} │ " +
+                $"{m.DocumentCoveragePercent,7:F1}% │ {tableIssues,7} │ " +
+                $"{m.OverBudget256Count,5} │ {m.MetadataErrorsCount,4} │ {m.ElapsedMs,5} мс");
         }
-
-        string[] candidateDirs =
-        [
-            Path.Combine(AppContext.BaseDirectory, "Documents"),
-            Path.Combine(Directory.GetCurrentDirectory(), "Documents"),
-            Path.Combine(Directory.GetCurrentDirectory(), "samples", "SmartDocs.StrategyTest.Cli", "Documents")
-        ];
-
-        foreach (var dir in candidateDirs)
-        {
-            if (Directory.Exists(dir))
-            {
-                var pdf = Directory.GetFiles(dir, "*.pdf").FirstOrDefault();
-                if (!string.IsNullOrEmpty(pdf))
-                {
-                    return Path.GetFullPath(pdf);
-                }
-            }
-        }
-
-        return null;
+        Console.WriteLine("=============================================================================================================");
     }
 
-    private static EmbeddingGenerator? TryInitBgeM3()
+    private static void PrintRetrievalBenchmarkTable(IReadOnlyList<RetrievalBenchmarkMetric> benchmarks)
     {
-        var baseDir = AppContext.BaseDirectory;
-        string? projectRoot = FindProjectRoot(baseDir);
-        if (projectRoot == null)
-        {
-            return null;
-        }
+        Console.WriteLine("\n=============================================================================================================");
+        Console.WriteLine("                         2. RETRIEVAL BENCHMARK REPORT (ТОЧНОСТЬ ПОИСКА)                             ");
+        Console.WriteLine("=============================================================================================================");
+        Console.WriteLine(" Стратегия                      │ Recall@5 │ Recall@10 │   MRR   │ nDCG@10 │ Zero-Hit Rate │ Средн. поиск (мс) ");
+        Console.WriteLine("────────────────────────────────┼──────────┼───────────┼─────────┼─────────┼───────────────┼───────────────────");
 
-        var modelPath = Path.Combine(projectRoot, "models", "bge-m3", "model.onnx");
-        var spmPath = Path.Combine(projectRoot, "models", "bge-m3", "sentencepiece.bpe.model");
-
-        if (File.Exists(modelPath) && File.Exists(spmPath))
+        foreach (var b in benchmarks.OrderByDescending(b => b.NdcgAt10))
         {
-            try
-            {
-                var gen = new EmbeddingGenerator(modelPath, spmPath);
-                Console.WriteLine("      [OK] Локальная ONNX-модель BGE-M3 (1024-dim) подключена для SemanticChunker.");
-                return gen;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"      [WARN] Не удалось инициализировать BGE-M3: {ex.Message}");
-            }
+            Console.WriteLine(
+                $" {b.StrategyName,-30} │ {b.RecallAt5,7:P0}  │ {b.RecallAt10,8:P0}  │ {b.Mrr,7:F3} │ {b.NdcgAt10,7:F3} │ {b.ZeroHitRatePercent,12:F1}% │ {b.AvgRetrievalMs,14:F1} мс");
         }
-        else
-        {
-            Console.WriteLine("      [INFO] Файлы модели BGE-M3 не найдены; SemanticChunker будет пропущен.");
-        }
-
-        return null;
+        Console.WriteLine("=============================================================================================================");
     }
 
-    private static IChatClient? TryInitChatClient(IConfiguration configuration)
+    private static void PrintAnswerQualityCostTable(IReadOnlyList<AnswerQualityCostMetric> answerMetrics)
     {
-        var authKey = configuration["SmartDocs:Llm:AuthorizationKey"]
-            ?? configuration["GigaChat:AuthorizationKey"]
-            ?? configuration["GIGACHAT_AUTH_KEY"]
-            ?? Environment.GetEnvironmentVariable("GIGACHAT_AUTH_KEY");
+        Console.WriteLine("\n=============================================================================================================");
+        Console.WriteLine("                     3. ANSWER QUALITY & COST REPORT (ОТВЕТЫ И СТОИМОСТЬ)                                    ");
+        Console.WriteLine("=============================================================================================================");
+        Console.WriteLine(" Стратегия                      │ Правильн. │ Обоснован. │ Поиск │ LLM ген. │ Всего мс │ Токены  │ Стоимость/запрос  ");
+        Console.WriteLine("────────────────────────────────┼───────────┼────────────┼───────┼──────────┼──────────┼─────────┼───────────────────");
 
-        if (string.IsNullOrWhiteSpace(authKey))
+        foreach (var a in answerMetrics.OrderByDescending(a => a.AvgCorrectnessScore))
         {
-            return null;
+            Console.WriteLine(
+                $" {a.StrategyName,-30} │ {a.AvgCorrectnessScore,8:P0}  │ {a.AvgFaithfulnessScore,9:P0}  │ {a.AvgRetrievalMs,4:F0}мс │ {a.AvgGenerationMs,6:F0}мс │ {a.AvgTotalLatencyMs,6:F0}мс │ {a.TotalAllTokens,7:N0} │ {a.AvgCostPerQueryRubles,14:F4} ₽");
         }
-
-        try
-        {
-            var options = new GigaChatClientOptions
-            {
-                AuthorizationKey = authKey,
-                DefaultModel = GigaChatModels.GigaChat2
-            };
-            return options.AsChatClient();
-        }
-        catch
-        {
-            return null;
-        }
+        Console.WriteLine("=============================================================================================================");
     }
 
     private static List<(string Name, string Description, IChunker Chunker)> BuildStrategySuite(
-        ITokenCounter tokenCounter,
+        TokenCounter tokenCounter,
         EmbeddingGenerator? bgeGenerator)
     {
         var suite = new List<(string Name, string Description, IChunker Chunker)>
         {
             (
                 "Recursive (800 chars)",
-                "Базовый рекурсивный чанкер с учетом заголовков и абзацев",
+                "Базовый рекурсивный чанкер с приоритетом заголовков и абзацев",
                 new RecursiveCharacterChunker(maxChunkSize: 800)
             ),
             (
@@ -321,461 +362,120 @@ internal static class Program
         return suite;
     }
 
-    private static StrategyResult AnalyzeChunks(
-        string name,
-        string description,
-        List<DocumentChunk> chunks,
-        TokenCounter tokenCounter,
-        long elapsedMs)
+    private static string? ResolvePdfPath(string[] args)
     {
-        int count = chunks.Count;
-        if (count == 0)
+        if (args.Length > 0 && !string.IsNullOrWhiteSpace(args[0]) && File.Exists(args[0]))
         {
-            return new StrategyResult(
-                name, description, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                new int[5], 0, 0, 0, 0, 0, 0, elapsedMs, chunks, []);
+            return Path.GetFullPath(args[0]);
         }
 
-        var charLengths = chunks.Select(c => c.Text.Length).OrderBy(x => x).ToList();
-        var tokenLengths = chunks.Select(c => tokenCounter.CountTokens(c.Text)).OrderBy(x => x).ToList();
-
-        int minChar = charLengths[0];
-        int maxChar = charLengths[^1];
-        double avgChar = charLengths.Average();
-        int medianChar = charLengths[charLengths.Count / 2];
-
-        int minTok = tokenLengths[0];
-        int maxTok = tokenLengths[^1];
-        double avgTok = tokenLengths.Average();
-        int medianTok = tokenLengths[tokenLengths.Count / 2];
-        int totalTokens = tokenLengths.Sum();
-
-        // Распределение по корзинам символов: <100, 100-300, 300-600, 600-1000, >1000
-        var buckets = new int[5];
-        foreach (int len in charLengths)
-        {
-            if (len < 100)
-            {
-                buckets[0]++;
-            }
-            else if (len < 300)
-            {
-                buckets[1]++;
-            }
-            else if (len < 600)
-            {
-                buckets[2]++;
-            }
-            else if (len < 1000)
-            {
-                buckets[3]++;
-            }
-            else
-            {
-                buckets[4]++;
-            }
-        }
-
-        // Проверка аномалий и дефектов границ
-        int emptyCount = 0;
-        int duplicateCount = 0;
-        int startLowerCount = 0;
-        int startPunctCount = 0;
-        int brokenWordEndCount = 0;
-        int brokenTableCount = 0;
-
-        var seenTexts = new HashSet<string>(StringComparer.Ordinal);
-        var issueReports = new List<string>();
-
-        for (int i = 0; i < chunks.Count; i++)
-        {
-            var text = chunks[i].Text;
-            var chunkId = chunks[i].ChunkId;
-
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                emptyCount++;
-                issueReports.Add($"[{chunkId}] Пустой чанк");
-                continue;
-            }
-
-            // Повторы
-            if (!seenTexts.Add(text.Trim()))
-            {
-                duplicateCount++;
-                issueReports.Add($"[{chunkId}] Дубликат текста");
-            }
-
-            var trimmed = text.Trim();
-
-            // Начинается с пунктуации
-            if (trimmed.Length > 0 && trimmed[0] is '.' or ',' or ';' or ':' or ')' or ']' or '}')
-            {
-                startPunctCount++;
-                issueReports.Add($"[{chunkId}] Начинается со знака препинания '{trimmed[0]}'");
-            }
-            // Начинается со строчной буквы (разрыв фразы)
-            else if (trimmed.Length > 0 && char.IsLower(trimmed[0]))
-            {
-                startLowerCount++;
-                issueReports.Add($"[{chunkId}] Начинается со строчной буквы: \"{trimmed[..Math.Min(25, trimmed.Length)]}...\"");
-            }
-
-            // Заканчивается разорванным словом (дефис на конце)
-            if (trimmed.EndsWith('-') || trimmed.EndsWith('—'))
-            {
-                brokenWordEndCount++;
-                issueReports.Add($"[{chunkId}] Заканчивается висячим дефисом/переносом");
-            }
-
-            // Разрыв таблицы (содержит разделитель |, но не содержит шапки таблицы ---)
-            if (trimmed.Contains('|') && !trimmed.Contains("---", StringComparison.Ordinal) && !trimmed.StartsWith('#'))
-            {
-                brokenTableCount++;
-                issueReports.Add($"[{chunkId}] Обрезанная строка таблицы без шапки заголовков");
-            }
-        }
-
-        return new StrategyResult(
-            name,
-            description,
-            count,
-            minChar,
-            maxChar,
-            avgChar,
-            medianChar,
-            minTok,
-            maxTok,
-            avgTok,
-            medianTok,
-            totalTokens,
-            buckets,
-            emptyCount,
-            duplicateCount,
-            startLowerCount,
-            startPunctCount,
-            brokenWordEndCount,
-            brokenTableCount,
-            elapsedMs,
-            chunks,
-            issueReports);
-    }
-
-    private static void PrintSummaryTable(List<StrategyResult> results)
-    {
-        Console.WriteLine("\n=============================================================================================================");
-        Console.WriteLine("                                СВОДНАЯ СРАВНИТЕЛЬНАЯ ТАБЛИЦА СТРАТЕГИЙ                                      ");
-        Console.WriteLine("=============================================================================================================");
-        Console.WriteLine(" Стратегия                      │ Чанков │ Символы (min/avg/max) │ Токены (min/avg/max) │ Пуст │ Дубль │ Дефекты │ Время ");
-        Console.WriteLine("────────────────────────────────┼────────┼───────────────────────┼──────────────────────┼──────┼───────┼─────────┼───────");
-
-        foreach (var r in results)
-        {
-            int totalIssues = r.StartLowerCount + r.StartPunctCount + r.BrokenWordEndCount + r.BrokenTableCount;
-            string charStats = string.Format(CultureInfo.InvariantCulture, "{0,3}/{1,3:F0}/{2,4}", r.MinChar, r.AvgChar, r.MaxChar);
-            string tokStats = string.Format(CultureInfo.InvariantCulture, "{0,3}/{1,3:F0}/{2,4}", r.MinTokens, r.AvgTokens, r.MaxTokens);
-
-            Console.Write($" {r.Name,-30} │");
-            Console.Write($" {r.TotalChunks,6} │");
-            Console.Write($" {charStats,-21} │");
-            Console.Write($" {tokStats,-20} │");
-
-            if (r.EmptyChunks > 0)
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.Write($" {r.EmptyChunks,4} │");
-                Console.ResetColor();
-            }
-            else
-            {
-                Console.Write($"    0 │");
-            }
-
-            if (r.DuplicateChunks > 0)
-            {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.Write($" {r.DuplicateChunks,5} │");
-                Console.ResetColor();
-            }
-            else
-            {
-                Console.Write($"     0 │");
-            }
-
-            if (totalIssues > 0)
-            {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.Write($" {totalIssues,7} │");
-                Console.ResetColor();
-            }
-            else
-            {
-                Console.ForegroundColor = ConsoleColor.Green;
-                Console.Write($"       0 │");
-                Console.ResetColor();
-            }
-
-            Console.WriteLine($" {r.ElapsedMs,4} мс");
-        }
-
-        Console.WriteLine("=============================================================================================================");
-    }
-
-    private static void PrintDetailedDiagnostics(List<StrategyResult> results)
-    {
-        Console.WriteLine("\n[4/4] ДЕТАЛЬНЫЙ АНАЛИЗ ГРАНИЦ И РАСПРЕДЕЛЕНИЯ РАЗМЕРОВ:");
-
-        foreach (var r in results)
-        {
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine($"\n▶ {r.Name} ({r.Description})");
-            Console.ResetColor();
-            Console.WriteLine($"   * Чанков: {r.TotalChunks} | Всего токенов: {r.TotalTokens:N0} | Время: {r.ElapsedMs} мс");
-            Console.WriteLine($"   * Символы: Мин={r.MinChar}, Медиана={r.MedianChar}, Среднее={r.AvgChar:F1}, Макс={r.MaxChar}");
-            Console.WriteLine($"   * Токены:  Мин={r.MinTokens}, Медиана={r.MedianTokens}, Среднее={r.AvgTokens:F1}, Макс={r.MaxTokens}");
-
-            // Гистограмма корзин
-            Console.WriteLine("   * Распределение по размеру (символов):");
-            Console.WriteLine($"       [ < 100]:     {r.Buckets[0],3} {new string('█', Math.Min(30, r.Buckets[0]))}");
-            Console.WriteLine($"       [100 - 300]:  {r.Buckets[1],3} {new string('█', Math.Min(30, r.Buckets[1]))}");
-            Console.WriteLine($"       [300 - 600]:  {r.Buckets[2],3} {new string('█', Math.Min(30, r.Buckets[2]))}");
-            Console.WriteLine($"       [600 - 1000]: {r.Buckets[3],3} {new string('█', Math.Min(30, r.Buckets[3]))}");
-            Console.WriteLine($"       [ > 1000]:    {r.Buckets[4],3} {new string('█', Math.Min(30, r.Buckets[4]))}");
-
-            // Аномалии
-            int totalIssues = r.StartLowerCount + r.StartPunctCount + r.BrokenWordEndCount + r.BrokenTableCount + r.DuplicateChunks + r.EmptyChunks;
-            if (totalIssues == 0)
-            {
-                Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine("   * Аномалии границ и целостности: не обнаружено (чистое разбиение).");
-                Console.ResetColor();
-            }
-            else
-            {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine($"   * Обнаружено потенциальных дефектов: {totalIssues}");
-                Console.ResetColor();
-                if (r.StartLowerCount > 0)
-                {
-                    Console.WriteLine($"     - Начинаются со строчной буквы (возможен разрыв фразы): {r.StartLowerCount}");
-                }
-                if (r.StartPunctCount > 0)
-                {
-                    Console.WriteLine($"     - Начинаются с пунктуации (мусор на стыке): {r.StartPunctCount}");
-                }
-                if (r.BrokenWordEndCount > 0)
-                {
-                    Console.WriteLine($"     - Заканчиваются висячим дефисом/переносом: {r.BrokenWordEndCount}");
-                }
-                if (r.BrokenTableCount > 0)
-                {
-                    Console.WriteLine($"     - Строки таблиц оторваны от заголовков: {r.BrokenTableCount}");
-                }
-                if (r.DuplicateChunks > 0)
-                {
-                    Console.WriteLine($"     - Полные дубликаты содержимого: {r.DuplicateChunks}");
-                }
-
-                // Первые 3 примера проблем
-                if (r.IssueReports.Count > 0)
-                {
-                    Console.WriteLine("     Примеры замечаний:");
-                    foreach (var issue in r.IssueReports.Take(3))
-                    {
-                        Console.WriteLine($"       • {issue}");
-                    }
-                }
-            }
-        }
-    }
-
-    private static void PrintVisualChunkSamples(List<StrategyResult> results)
-    {
-        Console.WriteLine("\n=============================================================================================================");
-        Console.WriteLine("                    ВИЗУАЛЬНЫЕ ПРИМЕРЫ ЧАНКОВ (ОЦЕНКА СОХРАНЕНИЯ СМЫСЛА И ТАБЛИЦ)                            ");
-        Console.WriteLine("=============================================================================================================");
-
-        // Выбираем ключевые стратегии для наглядного сравнения
-        string[] featured =
+        string[] candidateDirs =
         [
-            "Recursive (800 chars)",
-            "Recursive(800) + Token(256)",
-            "Sentence (5 sent)",
-            "FixedSize (500 / ov 100)"
+            Path.Combine(AppContext.BaseDirectory, "Documents"),
+            Path.Combine(Directory.GetCurrentDirectory(), "Documents"),
+            Path.Combine(Directory.GetCurrentDirectory(), "samples", "SmartDocs.StrategyTest.Cli", "Documents")
         ];
 
-        foreach (var r in results.Where(res => featured.Contains(res.Name)))
+        foreach (var dir in candidateDirs)
         {
-            Console.ForegroundColor = ConsoleColor.Magenta;
-            Console.WriteLine($"\n─── [Примеры чанков]: {r.Name} ({r.TotalChunks} чанков) ───");
-            Console.ResetColor();
-
-            if (r.Chunks.Count == 0)
+            if (Directory.Exists(dir))
             {
-                continue;
-            }
-
-            // 1. Первый чанк (титул/начало)
-            PrintSingleChunkPreview("Первый чанк (Начало документа)", r.Chunks[0]);
-
-            // 2. Чанк с таблицей или из середины
-            var tableChunk = r.Chunks.FirstOrDefault(c => c.Text.Contains('|') && c.Text.Contains("---"));
-            if (tableChunk != null && tableChunk.ChunkIndex != r.Chunks[0].ChunkIndex)
-            {
-                PrintSingleChunkPreview("Чанк с табличной структурой", tableChunk);
-            }
-            else if (r.Chunks.Count > 2)
-            {
-                PrintSingleChunkPreview("Чанк из середины", r.Chunks[r.Chunks.Count / 2]);
+                var pdf = Directory.GetFiles(dir, "*.pdf").FirstOrDefault();
+                if (!string.IsNullOrEmpty(pdf))
+                {
+                    return Path.GetFullPath(pdf);
+                }
             }
         }
+
+        return null;
     }
 
-    private static void PrintSingleChunkPreview(string label, DocumentChunk chunk)
+    private static string ResolveReportsDirectory()
     {
-        Console.WriteLine($"\n  ▶ {label} | ID: {chunk.ChunkId} | Размер: {chunk.Text.Length} симв.");
-        Console.WriteLine("  ┌" + new string('─', 78) + "┐");
+        var baseDir = AppContext.BaseDirectory;
+        string? projectRoot = FindProjectRoot(baseDir);
 
-        var lines = chunk.Text.Split('\n');
-        int displayed = 0;
-        foreach (var line in lines)
+        if (projectRoot != null)
         {
-            string l = line.TrimEnd('\r');
-            if (l.Length > 76)
-            {
-                l = string.Concat(l.AsSpan(0, 73), "...");
-            }
-            Console.WriteLine($"  │ {l,-76} │");
-            displayed++;
-            if (displayed >= 8 && lines.Length > 10)
-            {
-                Console.WriteLine($"  │ {"[... пропущено строк: " + (lines.Length - displayed) + " ...]",-76} │");
-                break;
-            }
+            var projectReports = Path.Combine(projectRoot, "samples", "SmartDocs.StrategyTest.Cli", "reports");
+            Directory.CreateDirectory(projectReports);
+            return projectReports;
         }
 
-        Console.WriteLine("  └" + new string('─', 78) + "┘");
+        var localReports = Path.Combine(baseDir, "reports");
+        Directory.CreateDirectory(localReports);
+        return localReports;
     }
 
-    private static void PrintContextualizationTest(Document doc, IChatClient? chatClient)
+    private static EmbeddingGenerator? TryInitBgeM3()
     {
-        Console.WriteLine("=============================================================================================================");
-        Console.WriteLine("                    ОТДЕЛЬНЫЙ ТЕСТ КОНТЕКСТУАЛИЗАЦИИ (ContextualChunker)                                     ");
-        Console.WriteLine("=============================================================================================================");
-
-        if (chatClient == null)
+        var baseDir = AppContext.BaseDirectory;
+        string? projectRoot = FindProjectRoot(baseDir);
+        if (projectRoot == null)
         {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine("  [ПРОПУЩЕНО] IChatClient не настроен.");
-            Console.WriteLine("  Чтобы протестировать обогащение чанков ситуационным контекстом (Anthropic Contextual Retrieval),");
-            Console.WriteLine("  укажите GIGACHAT_AUTH_KEY в переменных окружения или User Secrets.");
-            Console.ResetColor();
-            return;
+            return null;
         }
 
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("  [OK] Чат-модель обнаружена. Запуск ContextualChunker для демонстрации обогащения контекстом...");
-        Console.ResetColor();
+        var modelPath = Path.Combine(projectRoot, "models", "bge-m3", "model.onnx");
+        var spmPath = Path.Combine(projectRoot, "models", "bge-m3", "sentencepiece.bpe.model");
+
+        if (File.Exists(modelPath) && File.Exists(spmPath))
+        {
+            try
+            {
+                var gen = new EmbeddingGenerator(modelPath, spmPath);
+                Console.WriteLine("      [OK] Локальная ONNX-модель BGE-M3 (1024-dim) подключена.");
+                return gen;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"      [WARN] Не удалось инициализировать BGE-M3: {ex.Message}");
+            }
+        }
+
+        return null;
+    }
+
+    private static IChatClient? TryInitChatClient(IConfiguration configuration)
+    {
+        var authKey = configuration["SmartDocs:Llm:AuthorizationKey"]
+            ?? configuration["GigaChat:AuthorizationKey"]
+            ?? configuration["GIGACHAT_AUTH_KEY"]
+            ?? Environment.GetEnvironmentVariable("GIGACHAT_AUTH_KEY");
+
+        if (string.IsNullOrWhiteSpace(authKey))
+        {
+            return null;
+        }
 
         try
         {
-            var baseChunker = new RecursiveCharacterChunker(maxChunkSize: 500);
-            var contextualChunker = new ContextualChunker(baseChunker, chatClient);
-
-            var sw = Stopwatch.StartNew();
-            var rawChunks = new List<DocumentChunk>();
-            foreach (var c in baseChunker.ChunkAsync(doc).ToBlockingEnumerable().Take(2))
+            var options = new GigaChatClientOptions
             {
-                rawChunks.Add(c);
-            }
-
-            Console.WriteLine($"\n  Анализ добавления ситуационного контекста на первых 2 чанках:");
-
-            foreach (var raw in rawChunks)
-            {
-                var contextSw = Stopwatch.StartNew();
-                // ContextualChunker обогащает каждый чанк отдельным запросом к LLM
-                var singleDoc = new Document(doc.Metadata, raw.Text, doc.SourcePath);
-                var enrichedList = contextualChunker.ChunkAsync(singleDoc).ToBlockingEnumerable().ToList();
-                contextSw.Stop();
-
-                if (enrichedList.Count > 0)
-                {
-                    var enriched = enrichedList[0];
-                    string prefix = string.Empty;
-                    if (enriched.Text.Length > raw.Text.Length)
-                    {
-                        prefix = enriched.Text[..(enriched.Text.Length - raw.Text.Length)].Trim();
-                    }
-
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"\n  ─── Чанк #{raw.ChunkIndex} ({contextSw.ElapsedMilliseconds} мс) ───");
-                    Console.ResetColor();
-                    Console.WriteLine($"  [Сгенерированный контекст LLM]:\n  «{prefix}»\n");
-                    Console.WriteLine($"  [Исходный текст]: {raw.Text[..Math.Min(120, raw.Text.Length)].Replace("\n", " ", StringComparison.Ordinal)}...");
-                }
-            }
+                AuthorizationKey = authKey,
+                DefaultModel = GigaChatModels.GigaChat2
+            };
+            return options.AsChatClient();
         }
-        catch (Exception ex)
+        catch
         {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"  [Ошибка при вызове LLM]: {ex.Message}");
-            Console.ResetColor();
+            return null;
         }
     }
 
     private static string? FindProjectRoot(string startDir)
     {
-        var current = new DirectoryInfo(startDir);
-        while (current != null)
+        var cur = new DirectoryInfo(startDir);
+        while (cur != null)
         {
-            if (File.Exists(Path.Combine(current.FullName, "SmartDocs.slnx")) ||
-                File.Exists(Path.Combine(current.FullName, "SmartDocs.sln")))
+            if (File.Exists(Path.Combine(cur.FullName, "SmartDocs.sln")) ||
+                File.Exists(Path.Combine(cur.FullName, "SmartDocs.slnx")))
             {
-                return current.FullName;
+                return cur.FullName;
             }
-            current = current.Parent;
+            cur = cur.Parent;
         }
         return null;
     }
-
-    private static IEnumerable<T> ToBlockingEnumerable<T>(this IAsyncEnumerable<T> source)
-    {
-        var enumerator = source.GetAsyncEnumerator();
-        try
-        {
-            while (enumerator.MoveNextAsync().AsTask().GetAwaiter().GetResult())
-            {
-                yield return enumerator.Current;
-            }
-        }
-        finally
-        {
-            enumerator.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        }
-    }
-
-    private sealed record StrategyResult(
-        string Name,
-        string Description,
-        int TotalChunks,
-        int MinChar,
-        int MaxChar,
-        double AvgChar,
-        int MedianChar,
-        int MinTokens,
-        int MaxTokens,
-        double AvgTokens,
-        int MedianTokens,
-        int TotalTokens,
-        int[] Buckets,
-        int EmptyChunks,
-        int DuplicateChunks,
-        int StartLowerCount,
-        int StartPunctCount,
-        int BrokenWordEndCount,
-        int BrokenTableCount,
-        long ElapsedMs,
-        IReadOnlyList<DocumentChunk> Chunks,
-        IReadOnlyList<string> IssueReports);
 }
