@@ -109,7 +109,10 @@ public static class ExcelDocumentParser
             var header = rowDataList[0];
             var colCount = header.Count;
             var sheetTitle = sheetNames.Values.ElementAtOrDefault(tableIndex) ?? entry.Name;
+            int pageNumber = tableIndex + 1;
+
             var sb = new StringBuilder();
+            sb.Append("## Page ").Append(pageNumber).Append(": ").AppendLine(sheetTitle);
             sb.Append("### Таблица: ").AppendLine(sheetTitle).AppendLine();
             sb.Append("| ").Append(string.Join(" | ", header)).AppendLine(" |");
             sb.Append("| ").Append(string.Join(" | ", header.Select(static _ => "---"))).AppendLine(" |");
@@ -125,12 +128,16 @@ public static class ExcelDocumentParser
             }
 
             var tableMd = sb.ToString();
+            int tblStart = textBuilder.Length;
+            textBuilder.AppendLine(tableMd).AppendLine();
+
             tables.Add(new ExtractedTable(
                 TableId: $"{docId}#tbl-{tableIndex++}",
-                PageNumber: 1,
-                Markdown: tableMd));
-
-            textBuilder.AppendLine(tableMd).AppendLine();
+                PageNumber: pageNumber,
+                Markdown: tableMd,
+                SectionHeading: sheetTitle,
+                StartCharOffset: tblStart,
+                EndCharOffset: tblStart + tableMd.Length));
         }
 
         var meta = new DocumentMetadata(

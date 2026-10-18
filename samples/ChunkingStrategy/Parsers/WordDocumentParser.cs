@@ -57,32 +57,55 @@ public static class WordDocumentParser
             if (body != null)
             {
                 int tableIndex = 0;
+                int currentPage = 1;
+                string currentHeading = "Введение";
+                int currentDrawingIndex = 0;
+
                 foreach (var element in body.Elements())
                 {
+                    if (element.Descendants().Any(static d => (d.Name.LocalName == "br" && d.Attribute(W + "type")?.Value == "page") || d.Name.LocalName == "lastRenderedPageBreak"))
+                    {
+                        currentPage++;
+                    }
+
                     if (element.Name == W + "p")
                     {
                         var style = element.Element(W + "pPr")?.Element(W + "pStyle")?.Attribute(W + "val")?.Value;
                         var pText = string.Concat(element.Descendants(W + "t").Select(static t => t.Value)).Trim();
-                        if (string.IsNullOrEmpty(pText))
-                        {
-                            continue;
-                        }
 
                         if (style == "Heading1")
                         {
+                            currentHeading = pText;
                             textBuilder.Append("# ").AppendLine(pText).AppendLine();
                         }
                         else if (style == "Heading2")
                         {
+                            currentHeading = pText;
                             textBuilder.Append("## ").AppendLine(pText).AppendLine();
                         }
                         else if (style == "Heading3")
                         {
+                            currentHeading = pText;
                             textBuilder.Append("### ").AppendLine(pText).AppendLine();
                         }
-                        else
+                        else if (!string.IsNullOrEmpty(pText))
                         {
                             textBuilder.AppendLine(pText).AppendLine();
+                        }
+
+                        // Check if paragraph contains an embedded drawing/image
+                        if (element.Descendants().Any(static d => d.Name.LocalName == "drawing" || d.Name.LocalName == "pict"))
+                        {
+                            if (currentDrawingIndex < images.Count)
+                            {
+                                images[currentDrawingIndex] = images[currentDrawingIndex] with
+                                {
+                                    PageNumber = currentPage,
+                                    SectionHeading = currentHeading,
+                                    StartCharOffset = textBuilder.Length
+                                };
+                                currentDrawingIndex++;
+                            }
                         }
                     }
                     else if (element.Name == W + "tbl")
@@ -90,12 +113,16 @@ public static class WordDocumentParser
                         var tableMd = ConvertWordTableToMarkdown(element);
                         if (!string.IsNullOrWhiteSpace(tableMd))
                         {
+                            int tblStart = textBuilder.Length;
+                            textBuilder.AppendLine(tableMd).AppendLine();
+
                             tables.Add(new ExtractedTable(
                                 TableId: $"{docId}#tbl-{tableIndex++}",
-                                PageNumber: 1,
-                                Markdown: tableMd));
-
-                            textBuilder.AppendLine(tableMd).AppendLine();
+                                PageNumber: currentPage,
+                                Markdown: tableMd,
+                                SectionHeading: currentHeading,
+                                StartCharOffset: tblStart,
+                                EndCharOffset: tblStart + tableMd.Length));
                         }
                     }
                 }

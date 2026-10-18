@@ -34,6 +34,9 @@ public static class PdfDocumentParser
         var extractedImgs = await imageExtractor.ExtractAsync(filePath, outputImageDir, docId, cancellationToken);
         images.AddRange(extractedImgs);
 
+        var pageHeadings = new Dictionary<int, string>();
+        var pageOffsets = new Dictionary<int, int>();
+
         // 2. Extract text and detect tables per page
         using (var pdf = PdfDocument.Open(filePath))
         {
@@ -72,6 +75,16 @@ public static class PdfDocumentParser
 
                 if (lines.Count > 0)
                 {
+                    int pageStartOffset = textBuilder.Length;
+                    pageOffsets[page.Number] = pageStartOffset;
+
+                    var sectionHeading = lines.FirstOrDefault(static l =>
+                        l.StartsWith("##", StringComparison.Ordinal) ||
+                        l.StartsWith('#') ||
+                        l.StartsWith("Приложение", StringComparison.OrdinalIgnoreCase) ||
+                        l.StartsWith("Раздел", StringComparison.OrdinalIgnoreCase)) ?? $"Page {page.Number}";
+                    pageHeadings[page.Number] = sectionHeading;
+
                     textBuilder.Append("## Page ").Append(page.Number.ToString(System.Globalization.CultureInfo.InvariantCulture)).AppendLine().AppendLine();
                     var pageText = new StringBuilder();
                     for (int i = 0; i < lines.Count; i++)
@@ -131,13 +144,32 @@ public static class PdfDocumentParser
                         }
 
                         var tableMd = formattedTable.ToString().Trim();
+                        var fullSoFar = textBuilder.ToString();
+                        int tableOffset = fullSoFar.LastIndexOf(headerLine, StringComparison.Ordinal);
+                        if (tableOffset < 0)
+                        {
+                            tableOffset = pageStartOffset;
+                        }
+
                         tables.Add(new ExtractedTable(
                             TableId: $"{docId}#tbl-{tblIndex++}",
                             PageNumber: page.Number,
-                            Markdown: tableMd));
+                            Markdown: tableMd,
+                            SectionHeading: sectionHeading,
+                            StartCharOffset: tableOffset,
+                            EndCharOffset: tableOffset + tableMd.Length));
                     }
                 }
             }
+        }
+
+        // Link structural coordinates to extracted raster images
+        for (int i = 0; i < images.Count; i++)
+        {
+            var img = images[i];
+            var heading = pageHeadings.TryGetValue(img.PageNumber, out var h) ? h : $"Page {img.PageNumber}";
+            int pOffset = pageOffsets.TryGetValue(img.PageNumber, out int po) ? po : 0;
+            images[i] = img with { SectionHeading = heading, StartCharOffset = pOffset };
         }
 
         var meta = new DocumentMetadata(

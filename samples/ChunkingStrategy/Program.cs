@@ -199,7 +199,7 @@ foreach (var parsed in parsedDocuments)
     var mmChunker = new MultimodalChunker(
         preprocessedChunker,
         captionedImages,
-        Array.Empty<ExtractedTable>(),
+        parsed.Tables,
         tokenCounter,
         maxTokens: budgets.FinalTargetCeiling);
 
@@ -224,7 +224,7 @@ foreach (var parsed in parsedDocuments)
         Console.WriteLine("    ================================================");
     }
 
-    Console.WriteLine($"  Produced {finalizedDocChunks.Count} enriched chunk(s) (все строго проверены <= {budgets.FinalTargetCeiling} токенов).");
+    Console.WriteLine($"  Produced {finalizedDocChunks.Count} enriched chunk(s) (с привязкой {captionedImages.Count} рис., {parsed.Tables.Count} табл. по координатам; <= {budgets.FinalTargetCeiling} токенов).");
 }
 
 // 6. Generate 1024-dim Dense Embeddings for all Chunks

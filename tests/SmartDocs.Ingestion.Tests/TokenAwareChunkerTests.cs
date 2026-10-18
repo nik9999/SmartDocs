@@ -233,4 +233,144 @@ public class TokenAwareChunkerTests
 
         Assert.NotEmpty(chunks);
     }
+
+    private sealed class StaticChunker(params DocumentChunk[] chunks) : IChunker
+    {
+        public string Strategy => "static";
+
+        public async IAsyncEnumerable<DocumentChunk> ChunkAsync(
+            Document document,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await Task.Yield();
+            foreach (var chunk in chunks)
+            {
+                yield return chunk;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task MultimodalChunker_AssociatesImageByPageAndDoesNotDuplicateAcrossAllChunks()
+    {
+        var content = "## Page 1\nТекст первой страницы руководства.\n\n## Page 2\nТекст второй страницы со схемой подключения.";
+        var doc = CreateDocument(content, "doc1");
+
+        int page2Offset = content.IndexOf("## Page 2", StringComparison.Ordinal);
+        var chunk1 = CreateChunk("doc1#0", "doc1", 0, "## Page 1\nТекст первой страницы руководства.", 0, page2Offset - 1);
+        var chunk2 = CreateChunk("doc1#1", "doc1", 1, "## Page 2\nТекст второй страницы со схемой подключения.", page2Offset, content.Length);
+        var inner = new StaticChunker(chunk1, chunk2);
+
+        var imageOnPage2 = new ExtractedImage(
+            ImageId: "doc1#img-2",
+            PageNumber: 2,
+            Caption: "Схема подключения датчиков к клеммной колодке.",
+            ImagePath: null,
+            SectionHeading: "Page 2");
+
+        var mmChunker = new MultimodalChunker(
+            inner,
+            images: new[] { imageOnPage2 },
+            tables: Array.Empty<ExtractedTable>());
+
+        var chunks = new List<MultimodalChunk>();
+        await foreach (var chunk in mmChunker.ChunkAsync(doc))
+        {
+            chunks.Add(chunk);
+        }
+
+        Assert.Equal(2, chunks.Count);
+
+        // Chunk 0 (Page 1): NO image
+        Assert.Empty(chunks[0].Images);
+        Assert.DoesNotContain("[Figure doc1#img-2]", chunks[0].Chunk.Text);
+
+        // Chunk 1 (Page 2): HAS image
+        Assert.Single(chunks[1].Images);
+        Assert.Equal("doc1#img-2", chunks[1].Images[0].ImageId);
+        Assert.Contains("[Figure doc1#img-2]", chunks[1].Chunk.Text);
+    }
+
+    [Fact]
+    public async Task MultimodalChunker_AssociatesTableBySectionAndDoesNotDuplicateIfAlreadyInText()
+    {
+        var tableMarkdown = "| Параметр | Значение |\n| --- | --- |\n| Напряжение | 220 В |";
+        var content = $"# Раздел 1. Введение\nОбщее описание прибора.\n\n# Раздел 2. Спецификация\nТехнические параметры:\n{tableMarkdown}";
+        var doc = CreateDocument(content, "doc1");
+
+        int section2Offset = content.IndexOf("# Раздел 2", StringComparison.Ordinal);
+        var chunk1 = CreateChunk("doc1#0", "doc1", 0, "# Раздел 1. Введение\nОбщее описание прибора.", 0, section2Offset - 1);
+        var chunk2 = CreateChunk("doc1#1", "doc1", 1, $"# Раздел 2. Спецификация\nТехнические параметры:\n{tableMarkdown}", section2Offset, content.Length);
+        var inner = new StaticChunker(chunk1, chunk2);
+
+        var extractedTable = new ExtractedTable(
+            TableId: "doc1#tbl-1",
+            PageNumber: 1,
+            Markdown: tableMarkdown,
+            SectionHeading: "Раздел 2. Спецификация");
+
+        var mmChunker = new MultimodalChunker(
+            inner,
+            images: Array.Empty<ExtractedImage>(),
+            tables: new[] { extractedTable });
+
+        var chunks = new List<MultimodalChunk>();
+        await foreach (var chunk in mmChunker.ChunkAsync(doc))
+        {
+            chunks.Add(chunk);
+        }
+
+        Assert.Equal(2, chunks.Count);
+
+        // Chunk 0 (Раздел 1): NO table
+        Assert.Empty(chunks[0].Tables);
+
+        // Chunk 1 (Раздел 2): HAS table in metadata, but table Markdown is NOT duplicated twice in text!
+        Assert.Single(chunks[1].Tables);
+        Assert.Equal("doc1#tbl-1", chunks[1].Tables[0].TableId);
+
+        // Count occurrences of "Напряжение" in Chunk 1 text
+        int occurrences = chunks[1].Chunk.Text.Split("Напряжение").Length - 1;
+        Assert.Equal(1, occurrences);
+    }
+
+    [Fact]
+    public async Task MultimodalChunker_AssociatesImageByOffsetContainment()
+    {
+        var content = "Текст блока А. Длинный текст первого блока.\n\nТекст блока Б. Здесь расположена схема.";
+        var doc = CreateDocument(content, "doc1");
+
+        int blockBOffset = content.IndexOf("Текст блока Б", StringComparison.Ordinal);
+        var chunk1 = CreateChunk("doc1#0", "doc1", 0, "Текст блока А. Длинный текст первого блока.", 0, blockBOffset - 1);
+        var chunk2 = CreateChunk("doc1#1", "doc1", 1, "Текст блока Б. Здесь расположена схема.", blockBOffset, content.Length);
+        var inner = new StaticChunker(chunk1, chunk2);
+
+        var imageInBlockB = new ExtractedImage(
+            ImageId: "doc1#img-b",
+            PageNumber: 1,
+            Caption: "Схема блока Б.",
+            ImagePath: null,
+            StartCharOffset: blockBOffset + 5);
+
+        var mmChunker = new MultimodalChunker(
+            inner,
+            images: new[] { imageInBlockB },
+            tables: Array.Empty<ExtractedTable>());
+
+        var chunks = new List<MultimodalChunk>();
+        await foreach (var chunk in mmChunker.ChunkAsync(doc))
+        {
+            chunks.Add(chunk);
+        }
+
+        Assert.Equal(2, chunks.Count);
+
+        // Chunk 0 (Block A): no image
+        Assert.Empty(chunks[0].Images);
+
+        // Chunk 1 (Block B): contains image
+        Assert.Single(chunks[1].Images);
+        Assert.Equal("doc1#img-b", chunks[1].Images[0].ImageId);
+        Assert.Contains("[Figure doc1#img-b]", chunks[1].Chunk.Text);
+    }
 }

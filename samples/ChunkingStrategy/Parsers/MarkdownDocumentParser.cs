@@ -25,9 +25,25 @@ public static class MarkdownDocumentParser
         var currentTable = new StringBuilder();
         int tableIndex = 0;
 
+        string currentSection = "Общие сведения";
+        int currentPage = 1;
+
         foreach (var line in lines)
         {
             var trimmed = line.Trim();
+            if (trimmed.StartsWith('#'))
+            {
+                currentSection = trimmed.TrimStart('#').Trim();
+            }
+            if (trimmed.StartsWith("## Page", StringComparison.OrdinalIgnoreCase) || trimmed.StartsWith("[Page", StringComparison.OrdinalIgnoreCase))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(trimmed, @"(?:Page\s+|\[Page\s+)(\d+)");
+                if (match.Success && int.TryParse(match.Groups[1].Value, out int p))
+                {
+                    currentPage = p;
+                }
+            }
+
             if (trimmed.StartsWith('|') && trimmed.EndsWith('|'))
             {
                 currentTable.AppendLine(trimmed);
@@ -36,10 +52,20 @@ public static class MarkdownDocumentParser
             {
                 if (currentTable.Length > 0)
                 {
+                    var tableMd = currentTable.ToString().Trim();
+                    int tblStart = text.IndexOf(tableMd, StringComparison.Ordinal);
+                    if (tblStart < 0)
+                    {
+                        tblStart = 0;
+                    }
+
                     tables.Add(new ExtractedTable(
                         TableId: $"{docId}#tbl-{tableIndex++}",
-                        PageNumber: 1,
-                        Markdown: currentTable.ToString().Trim()));
+                        PageNumber: currentPage,
+                        Markdown: tableMd,
+                        SectionHeading: currentSection,
+                        StartCharOffset: tblStart,
+                        EndCharOffset: tblStart + tableMd.Length));
                     currentTable.Clear();
                 }
             }
@@ -47,10 +73,20 @@ public static class MarkdownDocumentParser
 
         if (currentTable.Length > 0)
         {
+            var tableMd = currentTable.ToString().Trim();
+            int tblStart = text.IndexOf(tableMd, StringComparison.Ordinal);
+            if (tblStart < 0)
+            {
+                tblStart = 0;
+            }
+
             tables.Add(new ExtractedTable(
                 TableId: $"{docId}#tbl-{tableIndex++}",
-                PageNumber: 1,
-                Markdown: currentTable.ToString().Trim()));
+                PageNumber: currentPage,
+                Markdown: tableMd,
+                SectionHeading: currentSection,
+                StartCharOffset: tblStart,
+                EndCharOffset: tblStart + tableMd.Length));
         }
 
         var meta = new DocumentMetadata(
