@@ -107,6 +107,15 @@ public sealed class GigaChatAuthClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// Invalidates the currently cached access token, forcing a refresh on the next request.
+    /// </summary>
+    public void InvalidateToken()
+    {
+        _cachedToken = null;
+        _tokenExpiresAt = DateTimeOffset.MinValue;
+    }
+
     private void ThrowIfDisposed()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

@@ -58,8 +58,16 @@ public sealed class ContextualChunker : IChunker
             var contextualDoc = GetContextualDocumentText(docText, raw.StartCharOffset, raw.EndCharOffset);
             var prompt = string.Format(System.Globalization.CultureInfo.InvariantCulture, PromptTemplate, contextualDoc, raw.Text);
             // ^ CompositeFormat-based overload selected by passing PromptTemplate as the format argument.
-            var response = await _chat.GetResponseAsync(prompt, cancellationToken: cancellationToken).ConfigureAwait(false);
-            var context = (response.Text ?? string.Empty).Trim();
+            string? context = null;
+            try
+            {
+                var response = await _chat.GetResponseAsync(prompt, cancellationToken: cancellationToken).ConfigureAwait(false);
+                context = (response.Text ?? string.Empty).Trim();
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                context = null;
+            }
 
             var augmented = string.IsNullOrEmpty(context)
                 ? raw.Text

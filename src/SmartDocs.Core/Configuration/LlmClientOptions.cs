@@ -81,7 +81,7 @@ public sealed class LlmClientOptions
 
         return Provider switch
         {
-            LlmProvider.GigaChat => SmartDocs.GigaChat.GigaChatModels.GigaChat2,
+            LlmProvider.GigaChat => SmartDocs.GigaChat.GigaChatModels.GigaChat2Pro,
             _ => "llama3.2",
         };
     }

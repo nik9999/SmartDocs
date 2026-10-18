@@ -42,7 +42,7 @@ public sealed class GigaChatChatClient : IChatClient
         ArgumentNullException.ThrowIfNull(messages);
         ThrowIfDisposed();
 
-        var request = BuildRequest(messages, options);
+        var request = await BuildRequestAsync(messages, options, cancellationToken).ConfigureAwait(false);
         var responseDto = await _client.CompleteChatAsync(request, cancellationToken).ConfigureAwait(false);
 
         return GigaChatMessageConverter.ToChatResponse(responseDto);
@@ -56,7 +56,7 @@ public sealed class GigaChatChatClient : IChatClient
         ArgumentNullException.ThrowIfNull(messages);
         ThrowIfDisposed();
 
-        var request = BuildRequest(messages, options);
+        var request = await BuildRequestAsync(messages, options, cancellationToken).ConfigureAwait(false);
         var stream = _client.CompleteChatStreamingAsync(request, cancellationToken);
 
         await foreach (var choice in stream.WithCancellation(cancellationToken).ConfigureAwait(false))
@@ -125,7 +125,10 @@ public sealed class GigaChatChatClient : IChatClient
         return null;
     }
 
-    private GigaChatCompletionsRequest BuildRequest(IEnumerable<ChatMessage> messages, ChatOptions? options)
+    private async Task<GigaChatCompletionsRequest> BuildRequestAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options,
+        CancellationToken cancellationToken)
     {
         var model = options?.ModelId ?? _defaultModelId;
         var functions = GigaChatMessageConverter.ToGigaChatFunctions(options);
@@ -142,10 +145,36 @@ public sealed class GigaChatChatClient : IChatClient
             };
         }
 
+        var messageDtos = GigaChatMessageConverter.ToGigaChatMessages(messages);
+
+        int msgIdx = 0;
+        foreach (var message in messages)
+        {
+            if (msgIdx < messageDtos.Count)
+            {
+                var dataContents = message.Contents.OfType<DataContent>().ToList();
+                if (dataContents.Count > 0)
+                {
+                    messageDtos[msgIdx].Attachments ??= [];
+                    foreach (var data in dataContents)
+                    {
+                        byte[] bytes = data.Data.ToArray();
+                        string mimeType = string.IsNullOrEmpty(data.MediaType) ? "image/png" : data.MediaType;
+                        string ext = mimeType.Contains("jpeg", StringComparison.OrdinalIgnoreCase) || mimeType.Contains("jpg", StringComparison.OrdinalIgnoreCase) ? "jpg" : "png";
+                        string fileName = $"img_{Guid.NewGuid():N}.{ext}";
+
+                        string fileId = await _client.UploadFileAsync(bytes, fileName, mimeType, "general", cancellationToken).ConfigureAwait(false);
+                        messageDtos[msgIdx].Attachments!.Add(fileId);
+                    }
+                }
+            }
+            msgIdx++;
+        }
+
         return new GigaChatCompletionsRequest
         {
             Model = model,
-            Messages = GigaChatMessageConverter.ToGigaChatMessages(messages),
+            Messages = messageDtos,
             Temperature = (float?)options?.Temperature,
             TopP = (float?)options?.TopP,
             MaxTokens = options?.MaxOutputTokens,

@@ -91,6 +91,17 @@ public sealed class GigaChatClientOptions
     public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(120);
 
     /// <summary>
+    /// Maximum number of automatic retry attempts on transient network failures or rate limits (HTTP 429, 500, 502, 503, 504, connection drops).
+    /// Defaults to 3.
+    /// </summary>
+    public int MaxRetries { get; set; } = 3;
+
+    /// <summary>
+    /// Base backoff delay between retry attempts. Defaults to 500 milliseconds.
+    /// </summary>
+    public TimeSpan RetryBaseDelay { get; set; } = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
     /// Optional custom <see cref="HttpClient"/> instance to use for all outbound calls.
     /// If null, a managed client configured with <see cref="IgnoreSslValidation"/> is created.
     /// </summary>

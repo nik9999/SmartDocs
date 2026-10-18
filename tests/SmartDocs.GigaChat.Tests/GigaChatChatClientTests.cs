@@ -112,4 +112,87 @@ public class GigaChatChatClientTests
         Assert.Equal("Привет, мир!", fullText);
         Assert.Equal(ChatFinishReason.Stop, chunks[1].FinishReason);
     }
+
+    [Fact]
+    public async Task GetResponseAsync_WithDataContent_UploadsFileAndSetsAttachment()
+    {
+        bool fileUploaded = false;
+        bool chatCompleted = false;
+
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var uri = req.RequestUri?.ToString();
+            if (uri == "https://gigachat.devices.sberbank.ru/api/v1/files")
+            {
+                fileUploaded = true;
+                Assert.Equal(HttpMethod.Post, req.Method);
+                var json = """
+                {
+                  "id": "file-uuid-42",
+                  "object": "file",
+                  "bytes": 4,
+                  "created_at": 1710000000,
+                  "filename": "img_test.png",
+                  "purpose": "general"
+                }
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+            }
+
+            if (uri == "https://gigachat.devices.sberbank.ru/api/v1/chat/completions")
+            {
+                chatCompleted = true;
+                var requestBody = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult() ?? "";
+                Assert.Contains("file-uuid-42", requestBody, StringComparison.Ordinal);
+
+                var json = """
+                {
+                  "choices": [
+                    {
+                      "message": {
+                        "role": "assistant",
+                        "content": "Схема подключения датчиков к модулю MDS."
+                      },
+                      "index": 0,
+                      "finish_reason": "stop"
+                    }
+                  ],
+                  "created": 1710000000,
+                  "model": "GigaChat-Pro"
+                }
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+            }
+
+            throw new InvalidOperationException($"Unexpected URI: {uri}");
+        });
+
+        using var httpClient = new HttpClient(handler);
+        var options = new GigaChatClientOptions
+        {
+            AuthorizationKey = MockJwt,
+            HttpClient = httpClient
+        };
+
+        using var client = new GigaChatClient(options);
+        var chatClient = client.AsChatClient();
+
+        var message = new ChatMessage(ChatRole.User,
+        [
+            new TextContent("Опиши схему на изображении"),
+            new DataContent(new byte[] { 0x89, 0x50, 0x4E, 0x47 }, mediaType: "image/png")
+        ]);
+
+        var response = await chatClient.GetResponseAsync([message]);
+
+        Assert.True(fileUploaded);
+        Assert.True(chatCompleted);
+        Assert.Equal("Схема подключения датчиков к модулю MDS.", response.Text);
+    }
 }

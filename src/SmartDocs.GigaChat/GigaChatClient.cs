@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -45,7 +47,8 @@ public sealed class GigaChatClient : IDisposable
         {
             var handler = new SocketsHttpHandler
             {
-                PooledConnectionLifetime = TimeSpan.FromMinutes(15),
+                PooledConnectionLifetime = TimeSpan.FromMinutes(1),
+                PooledConnectionIdleTimeout = TimeSpan.FromSeconds(15),
             };
 
             if (options.IgnoreSslValidation)
@@ -130,15 +133,16 @@ public sealed class GigaChatClient : IDisposable
         ThrowIfDisposed();
 
         request.Stream = false;
-        var token = await _authClient.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
-
         var endpoint = new Uri(_options.BaseUrl.ToString().TrimEnd('/') + "/chat/completions");
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        httpRequest.Content = JsonContent.Create(request);
 
-        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
+        using var response = await SendWithRetryAsync(token =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            req.Content = JsonContent.Create(request);
+            return req;
+        }, cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -242,15 +246,16 @@ public sealed class GigaChatClient : IDisposable
         ArgumentNullException.ThrowIfNull(request);
         ThrowIfDisposed();
 
-        var token = await _authClient.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
-
         var endpoint = new Uri(_options.BaseUrl.ToString().TrimEnd('/') + "/embeddings");
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        httpRequest.Content = JsonContent.Create(request);
 
-        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
+        using var response = await SendWithRetryAsync(token =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            req.Content = JsonContent.Create(request);
+            return req;
+        }, cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -263,6 +268,230 @@ public sealed class GigaChatClient : IDisposable
 
         var result = await response.Content.ReadFromJsonAsync<GigaChatEmbeddingsResponse>(cancellationToken: cancellationToken).ConfigureAwait(false);
         return result ?? throw new InvalidOperationException("GigaChat returned an empty embeddings response.");
+    }
+
+    /// <summary>
+    /// Uploads a file (e.g. image) to GigaChat Files API for multimodal processing.
+    /// </summary>
+    /// <param name="fileBytes">Binary contents of the file.</param>
+    /// <param name="fileName">File name with extension (e.g. image.png).</param>
+    /// <param name="mimeType">MIME type (e.g. image/png, image/jpeg).</param>
+    /// <param name="purpose">Purpose of the file upload (defaults to "general").</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The unique file ID returned by GigaChat.</returns>
+    public async Task<string> UploadFileAsync(
+        byte[] fileBytes,
+        string fileName = "image.png",
+        string mimeType = "image/png",
+        string purpose = "general",
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(fileBytes);
+        ThrowIfDisposed();
+
+        var endpoint = new Uri(_options.BaseUrl.ToString().TrimEnd('/') + "/files");
+
+        using var response = await SendWithRetryAsync(token =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, endpoint);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            var multipart = new MultipartFormDataContent();
+            var byteContent = new ByteArrayContent(fileBytes);
+            byteContent.Headers.ContentType = new MediaTypeHeaderValue(mimeType);
+            multipart.Add(byteContent, "file", fileName);
+            multipart.Add(new StringContent(purpose), "purpose");
+
+            req.Content = multipart;
+            return req;
+        }, cancellationToken).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            throw new HttpRequestException(
+                $"GigaChat file upload failed: {(int)response.StatusCode} {response.ReasonPhrase}. Details: {errorBody}",
+                null,
+                response.StatusCode);
+        }
+
+        using var doc = await JsonDocument.ParseAsync(
+            await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (doc.RootElement.TryGetProperty("id", out var idProp))
+        {
+            return idProp.GetString() ?? throw new InvalidOperationException("GigaChat returned an empty file id.");
+        }
+
+        throw new InvalidOperationException("GigaChat file upload response missing 'id' property.");
+    }
+
+    /// <summary>
+    /// Retrieves the list of available models from the GigaChat API via GET /models.
+    /// </summary>
+    public async Task<IReadOnlyList<GigaChatModelDto>> GetModelsAsync(CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+
+        var endpoint = new Uri(_options.BaseUrl.ToString().TrimEnd('/') + "/models");
+
+        using var response = await SendWithRetryAsync(token =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            return req;
+        }, cancellationToken).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            throw new HttpRequestException(
+                $"GigaChat get models failed: {(int)response.StatusCode} {response.ReasonPhrase}. Details: {errorBody}",
+                null,
+                response.StatusCode);
+        }
+
+        var result = await response.Content.ReadFromJsonAsync<GigaChatModelsResponse>(cancellationToken: cancellationToken).ConfigureAwait(false);
+        return result?.Data ?? [];
+    }
+
+    /// <summary>
+    /// Retrieves information about a specific model via GET /models/{modelId}.
+    /// </summary>
+    public async Task<GigaChatModelDto?> GetModelAsync(string modelId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+        ThrowIfDisposed();
+
+        var endpoint = new Uri(_options.BaseUrl.ToString().TrimEnd('/') + $"/models/{Uri.EscapeDataString(modelId)}");
+
+        using var response = await SendWithRetryAsync(token =>
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            return req;
+        }, cancellationToken).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        return await response.Content.ReadFromJsonAsync<GigaChatModelDto>(cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<HttpResponseMessage> SendWithRetryAsync(
+        Func<string, HttpRequestMessage> requestFactory,
+        CancellationToken cancellationToken)
+    {
+        int maxAttempts = Math.Max(1, _options.MaxRetries + 1);
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var token = await _authClient.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+            var request = requestFactory(token);
+
+            HttpResponseMessage? response = null;
+            try
+            {
+                response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    return response;
+                }
+
+                if (response.StatusCode == HttpStatusCode.Unauthorized && attempt < maxAttempts)
+                {
+                    _authClient.InvalidateToken();
+                    response.Dispose();
+                    await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (attempt < maxAttempts && IsTransientStatusCode(response.StatusCode))
+                {
+                    var delay = CalculateDelay(attempt, response);
+                    response.Dispose();
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                return response;
+            }
+            catch (Exception ex) when (attempt < maxAttempts && IsTransientException(ex, cancellationToken))
+            {
+                response?.Dispose();
+                var delay = CalculateDelay(attempt, null);
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException("GigaChat retry policy exhausted without returning a response.");
+    }
+
+    private static bool IsTransientStatusCode(HttpStatusCode statusCode) =>
+        statusCode switch
+        {
+            HttpStatusCode.TooManyRequests => true, // 429
+            HttpStatusCode.InternalServerError => true, // 500
+            HttpStatusCode.BadGateway => true, // 502
+            HttpStatusCode.ServiceUnavailable => true, // 503
+            HttpStatusCode.GatewayTimeout => true, // 504
+            HttpStatusCode.RequestTimeout => true, // 408
+            _ => false,
+        };
+
+    private static bool IsTransientException(Exception ex, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+
+        if (ex is OperationCanceledException)
+        {
+            // If caller token was not requested, this is an internal HttpClient.Timeout (transient)
+            return true;
+        }
+
+        if (ex is TimeoutException)
+        {
+            return true;
+        }
+
+        if (ex is HttpRequestException)
+        {
+            return true;
+        }
+
+        if (ex is IOException)
+        {
+            return true;
+        }
+
+        if (ex is SocketException)
+        {
+            return true;
+        }
+
+        return ex.InnerException != null && IsTransientException(ex.InnerException, cancellationToken);
+    }
+
+    private TimeSpan CalculateDelay(int attempt, HttpResponseMessage? response)
+    {
+        if (response?.Headers.RetryAfter?.Delta is { } delta && delta > TimeSpan.Zero && delta < TimeSpan.FromSeconds(30))
+        {
+            return delta;
+        }
+
+        var baseMs = _options.RetryBaseDelay.TotalMilliseconds;
+        var expMs = baseMs * Math.Pow(2, attempt - 1);
+        var clampedMs = Math.Min(expMs, 10000);
+        return TimeSpan.FromMilliseconds(clampedMs);
     }
 
     private void ThrowIfDisposed()

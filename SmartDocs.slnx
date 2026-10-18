@@ -14,6 +14,7 @@
   <Folder Name="/samples/">
     <Project Path="samples/ChunkingPlayground/ChunkingPlayground.csproj" />
     <Project Path="samples/ChunkingStrategy/ChunkingStrategy.csproj" />
+    <Project Path="samples/SmartDocs.Demo.Cli/SmartDocs.Demo.Cli.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SmartDocs.GigaChat.Tests/SmartDocs.GigaChat.Tests.csproj" />
