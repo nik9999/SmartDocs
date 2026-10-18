@@ -64,3 +64,4 @@ public sealed class DocxDocumentLoaderOptions
     /// </summary>
     public Func<string, DocumentMetadata>? MetadataExtractor { get; set; }
 }
+

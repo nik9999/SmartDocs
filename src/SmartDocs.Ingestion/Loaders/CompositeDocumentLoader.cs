@@ -77,3 +77,4 @@ public sealed class CompositeDocumentLoader : IDocumentLoader
                 string.Join(", ", SupportedExtensions)));
     }
 }
+

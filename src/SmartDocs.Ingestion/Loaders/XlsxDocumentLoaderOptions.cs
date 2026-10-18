@@ -64,3 +64,4 @@ public sealed class XlsxDocumentLoaderOptions
     /// </summary>
     public Func<string, DocumentMetadata>? MetadataExtractor { get; set; }
 }
+
