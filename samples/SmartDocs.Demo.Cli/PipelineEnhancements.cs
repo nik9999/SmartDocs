@@ -244,9 +244,9 @@ public sealed class ContravtPdfDocumentLoader(HttpClient? httpClient = null) : I
             ConfidentialityLevel: "Public",
             DocumentType: docType,
             FiscalYear: fiscalYear,
-            Author: author,
+            Author: StripNoiseSymbols(author),
             LastModified: lastModified,
-            Title: title);
+            Title: StripNoiseSymbols(title));
 
         return (meta, detectedDocCode);
     }
@@ -257,8 +257,21 @@ public sealed class ContravtPdfDocumentLoader(HttpClient? httpClient = null) : I
         return page.GetWords()
             .GroupBy(w => Math.Round(w.BoundingBox.Bottom / 3.0) * 3.0)
             .OrderByDescending(g => g.Key)
-            .Select(g => string.Join(" ", g.OrderBy(w => w.BoundingBox.Left).Select(w => w.Text)).Trim())
+            .Select(g => StripNoiseSymbols(string.Join(" ", g.OrderBy(w => w.BoundingBox.Left).Select(w => w.Text)).Trim()))
             .Where(line => !string.IsNullOrWhiteSpace(line));
+    }
+
+    private static string StripNoiseSymbols(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        return text
+            .Replace("®", "", StringComparison.Ordinal)
+            .Replace("™", "", StringComparison.Ordinal)
+            .Replace("©", "", StringComparison.Ordinal);
     }
 }
 

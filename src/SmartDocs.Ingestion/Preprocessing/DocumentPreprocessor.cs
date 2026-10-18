@@ -72,7 +72,13 @@ public sealed partial class DocumentPreprocessor : IDocumentPreprocessor, ITextC
             cleanedText = ProcessPages(cleanedText);
         }
 
-        return document with { Content = cleanedText };
+        var cleanedMetadata = document.Metadata with
+        {
+            Title = Clean(document.Metadata.Title),
+            Author = Clean(document.Metadata.Author)
+        };
+
+        return document with { Content = cleanedText, Metadata = cleanedMetadata };
     }
 
     /// <inheritdoc/>
@@ -83,7 +89,7 @@ public sealed partial class DocumentPreprocessor : IDocumentPreprocessor, ITextC
             return string.Empty;
         }
 
-        // 1. Remove invisible Unicode characters and normalize non-breaking spaces
+        // 1. Remove invisible Unicode characters, trademark/copyright symbols, and normalize non-breaking spaces
         var sb = new StringBuilder(text.Length);
         foreach (char c in text)
         {
@@ -95,6 +101,10 @@ public sealed partial class DocumentPreprocessor : IDocumentPreprocessor, ITextC
                 case '\u200C':
                 case '\u200D':
                 case '\uFEFF':
+                // Registered trademark, trademark, copyright symbols
+                case '®': // \u00AE
+                case '™': // \u2122
+                case '©': // \u00A9
                     break;
 
                 // Non-breaking spaces -> standard space

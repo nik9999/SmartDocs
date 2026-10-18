@@ -174,4 +174,34 @@ public class PreprocessingTests
         Assert.Contains("измерения", chunks[0].Text);
         Assert.DoesNotContain("преобразо-", chunks[0].Text);
     }
+
+    [Fact]
+    public void Clean_RemovesTrademarkAndCopyrightSymbols()
+    {
+        var cleaner = new DocumentPreprocessor();
+
+        var input = "НПФ «КонтрАвт»® производит приборы под маркой DataTrack™ © 2026";
+        var cleaned = cleaner.Clean(input);
+
+        Assert.Equal("НПФ «КонтрАвт» производит приборы под маркой DataTrack 2026", cleaned);
+    }
+
+    [Fact]
+    public void Preprocess_CleansMetadataTitleAndAuthor()
+    {
+        var preprocessor = new DocumentPreprocessor();
+
+        var doc = new Document(
+            new DocumentMetadata("doc-tm", "silo", "dept", "office", "internal", "pdf", 2026, "КонтрАвт®", DateOnly.MinValue, "MasterSCADA™ Guide ©"),
+            "Содержимое документа с символом ® и знаком копирайта ©.",
+            "path.pdf");
+
+        var result = preprocessor.Preprocess(doc);
+
+        Assert.Equal("КонтрАвт", result.Metadata.Author);
+        Assert.Equal("MasterSCADA Guide", result.Metadata.Title);
+        Assert.DoesNotContain("®", result.Content);
+        Assert.DoesNotContain("©", result.Content);
+    }
 }
+
