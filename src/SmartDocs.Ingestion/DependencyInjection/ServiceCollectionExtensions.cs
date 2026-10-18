@@ -44,7 +44,15 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<Preprocessing.IDocumentPreprocessor, Preprocessing.DocumentPreprocessor>();
         services.AddSingleton<Loaders.PdfDocumentLoader>();
-        services.AddSingleton<IDocumentLoader, Loaders.PdfDocumentLoader>();
+        services.AddSingleton<Loaders.DocxDocumentLoader>();
+        services.AddSingleton<Loaders.XlsxDocumentLoader>();
+        services.AddSingleton<Loaders.CompositeDocumentLoader>(static sp =>
+            new Loaders.CompositeDocumentLoader([
+                sp.GetRequiredService<Loaders.PdfDocumentLoader>(),
+                sp.GetRequiredService<Loaders.DocxDocumentLoader>(),
+                sp.GetRequiredService<Loaders.XlsxDocumentLoader>()
+            ]));
+        services.AddSingleton<IDocumentLoader>(static sp => sp.GetRequiredService<Loaders.CompositeDocumentLoader>());
 
         services.AddSingleton<IChunker>(static sp =>
         {

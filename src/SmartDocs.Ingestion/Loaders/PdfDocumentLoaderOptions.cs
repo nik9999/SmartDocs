@@ -72,3 +72,4 @@ public sealed class PdfDocumentLoaderOptions
     /// </summary>
     public Func<string, PdfDocument, DocumentMetadata>? MetadataExtractor { get; set; }
 }
+
