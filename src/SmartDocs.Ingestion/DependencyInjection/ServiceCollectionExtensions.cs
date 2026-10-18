@@ -43,6 +43,8 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection(SmartDocsOptions.SectionName));
 
         services.AddSingleton<Preprocessing.IDocumentPreprocessor, Preprocessing.DocumentPreprocessor>();
+        services.AddSingleton<Loaders.PdfDocumentLoader>();
+        services.AddSingleton<IDocumentLoader, Loaders.PdfDocumentLoader>();
 
         services.AddSingleton<IChunker>(static sp =>
         {
