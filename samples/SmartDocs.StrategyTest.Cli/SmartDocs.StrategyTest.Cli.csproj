@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>SmartDocs.Samples.StrategyTest.Cli</RootNamespace>
+    <AssemblyName>SmartDocs.StrategyTest.Cli</AssemblyName>
+    <UserSecretsId>smartdocs-chunking-strategy</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SmartDocs.Core\SmartDocs.Core.csproj" />
+    <ProjectReference Include="..\..\src\SmartDocs.Ingestion\SmartDocs.Ingestion.csproj" />
+    <ProjectReference Include="..\..\src\SmartDocs.GigaChat\SmartDocs.GigaChat.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Documents\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
+
