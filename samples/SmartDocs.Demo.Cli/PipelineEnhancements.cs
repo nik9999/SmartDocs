@@ -64,7 +64,7 @@ public sealed class ContravtPdfDocumentLoader(HttpClient? httpClient = null) : I
                 if (Regex.IsMatch(line, @"^\d+(\.\d+)*\s+[А-ЯЁA-Z][а-яёa-zА-ЯЁA-Z\s\-]{3,60}$"))
                 {
                     int depth = line.Split(' ')[0].Count(c => c == '.') + 1;
-                    sb.AppendLine(CultureInfo.InvariantCulture, $"\n{new string('#', Math.Min(depth, 4))} {line}\n");
+                    sb.AppendLine(CultureInfo.InvariantCulture, $"\n{new string('#', Math.Clamp(depth, 1, 6))} {line}\n");
                 }
                 else
                 {
@@ -370,8 +370,9 @@ public sealed class AtomicMarkdownTableChunker(
         Document document,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var breadcrumbs = new string[4];
-        var blocks = Regex.Split(document.Content, @"(?m)(?=^#{1,4}\s)")
+        const int MaxHeaderLevel = 6;
+        var breadcrumbs = new string[MaxHeaderLevel];
+        var blocks = Regex.Split(document.Content, @"(?m)(?=^#{1,6}\s)")
             .Select(s => s.Trim())
             .Where(s => !string.IsNullOrEmpty(s));
 
@@ -390,13 +391,17 @@ public sealed class AtomicMarkdownTableChunker(
                 string body = newlineIdx >= 0 ? block[(newlineIdx + 1)..].Trim() : string.Empty;
 
                 int level = headerLine.TakeWhile(c => c == '#').Count();
-                if (level is >= 1 and <= 4)
+                if (level >= 1 && level <= breadcrumbs.Length)
                 {
                     breadcrumbs[level - 1] = headerLine.TrimStart('#', ' ');
-                    for (int i = level; i < 4; i++)
+                    for (int i = level; i < breadcrumbs.Length; i++)
                     {
                         breadcrumbs[i] = string.Empty;
                     }
+                }
+                else if (level > breadcrumbs.Length)
+                {
+                    breadcrumbs[^1] = headerLine.TrimStart('#', ' ');
                 }
 
                 if (string.IsNullOrEmpty(body))
